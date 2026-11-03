@@ -2,6 +2,7 @@ package com.lectures.business.design.sales.application;
 
 import com.lectures.business.design.sales.api.OrderLineRequest;
 import com.lectures.business.design.sales.api.OrderSummary;
+import com.lectures.business.design.sales.api.OrderingFacade;
 import com.lectures.business.design.sales.api.PlaceOrderCommand;
 import com.lectures.business.design.sales.domain.Customer;
 import com.lectures.business.design.sales.domain.CustomerId;
@@ -17,7 +18,7 @@ import java.util.Currency;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-public final class OrderService {
+public final class OrderService implements OrderingFacade {
 
     private static final Currency TRY = Currency.getInstance("TRY");
 
@@ -38,6 +39,7 @@ public final class OrderService {
         this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
+    @Override
     public OrderSummary placeOrder(PlaceOrderCommand command) {
         Objects.requireNonNull(command, "command must not be null");
         Customer customer = customers.getById(CustomerId.of(command.customerId()));
@@ -51,18 +53,22 @@ public final class OrderService {
         return mapper.toSummary(order);
     }
 
+    @Override
     public OrderSummary confirm(int orderId) {
         return change(orderId, Order::confirm);
     }
 
+    @Override
     public OrderSummary ship(int orderId) {
         return change(orderId, order -> order.ship(LocalDate.now(clock)));
     }
 
+    @Override
     public OrderSummary cancel(int orderId) {
         return change(orderId, Order::cancel);
     }
 
+    @Override
     public OrderSummary getOrder(int orderId) {
         return mapper.toSummary(orders.getById(OrderId.of(orderId)));
     }
