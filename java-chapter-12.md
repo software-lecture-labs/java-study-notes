@@ -3,7 +3,7 @@
 # Bölüm 12: Persistence Boundary, JDBC ve Flayway
 
 <!-- nav:top:start -->
-[← Bölüm 11](java-chapter-11.md#top) · [İçindekiler](README.md#top)
+[← Bölüm 11](java-chapter-11.md#top) · [İçindekiler](README.md#top) · [→ Bölüm 13](java-chapter-13.md#top)
 <!-- nav:top:end -->
 
 Geldiğimiz nokta itibariyle epeyce ilerledik. Ancak şu ana kadarki tüm siparişler bellekte yönetildi *(in-memory)* ve kalıcı olarak saklanmıyor. Uygulamamız kapandığında veriler kayboluyor ve **SequentialOrderIdGenerator** her açılışta 10248 gibi sabit rakamdan saymaya başlıyor. Diğer yandan birde sorunumuz var; **InMemoryOrderRepository** sınıfı nesneleri referans yoluyla sakladığı için servis içinden yapılan **save** çağrısını silsek bile bütün testler geçecektir *(Bunu deneyelim)* Yani elimizdeki in-memory repository gerçek bir veritabanının en temel davranışlarından birini taklit etmiyor.
@@ -1659,5 +1659,5 @@ mvn -pl quality/architecture-tests -am test
 
 | ← Önceki Bölüm | İçindekiler | Sonraki Bölüm → |
 | :--- | :---: | ---: |
-| [Bölüm 11: Domain Events ve Observer Deseni](java-chapter-11.md#top) | [Ders Notları](README.md#top) | |
+| [Bölüm 11: Domain Events ve Observer Deseni](java-chapter-11.md#top) | [Ders Notları](README.md#top) | [Bölüm 13: HTTP Boundary, DTO, Validasyon ve Hata Sözleşmeleri](java-chapter-13.md#top) |
 <!-- nav:bottom:end -->
