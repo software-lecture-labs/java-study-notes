@@ -7,7 +7,7 @@ public class OrderNotFoundException extends DomainException {
     private final OrderId orderId;
 
     public OrderNotFoundException(OrderId orderId) {
-        super("no order with id " + orderId);
+        super("no order with id " + orderId, Kind.NOT_FOUND);
         this.orderId = orderId;
     }
 

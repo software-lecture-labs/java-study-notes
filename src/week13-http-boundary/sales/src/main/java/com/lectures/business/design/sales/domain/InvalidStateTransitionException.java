@@ -9,7 +9,7 @@ public class InvalidStateTransitionException extends DomainException {
     private final OrderStatus to;
 
     public InvalidStateTransitionException(OrderId orderId, OrderStatus from, OrderStatus to) {
-        super("order " + orderId + " cannot move from " + from + " to " + to);
+        super("order " + orderId + " cannot move from " + from + " to " + to, Kind.CONFLICT);
         this.orderId = orderId;
         this.from = from;
         this.to = to;

@@ -7,7 +7,7 @@ public class CustomerNotFoundException extends DomainException {
     private final CustomerId customerId;
 
     public CustomerNotFoundException(CustomerId customerId) {
-        super("no customer with id " + customerId);
+        super("no customer with id " + customerId, Kind.NOT_FOUND);
         this.customerId = customerId;
     }
 

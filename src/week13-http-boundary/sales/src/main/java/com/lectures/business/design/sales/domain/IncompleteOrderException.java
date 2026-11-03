@@ -12,7 +12,7 @@ public class IncompleteOrderException extends DomainException {
     private final MissingPart missingPart;
 
     public IncompleteOrderException(OrderId orderId, MissingPart missingPart) {
-        super("order " + orderId + " cannot be confirmed: " + missingPart + " missing");
+        super("order " + orderId + " cannot be confirmed: " + missingPart + " missing", Kind.RULE_VIOLATION);
         this.orderId = orderId;
         this.missingPart = missingPart;
     }

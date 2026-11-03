@@ -9,7 +9,7 @@ public class OrderNotModifiableException extends DomainException {
     private final String attemptedAction;
 
     public OrderNotModifiableException(OrderId orderId, OrderStatus status, String attemptedAction) {
-        super("cannot " + attemptedAction + " on order " + orderId + " in status " + status);
+        super("cannot " + attemptedAction + " on order " + orderId + " in status " + status, Kind.CONFLICT);
         this.orderId = orderId;
         this.status = status;
         this.attemptedAction = attemptedAction;
