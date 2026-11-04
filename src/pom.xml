@@ -42,6 +42,7 @@
         <module>week11-domain-events</module>
         <module>week12-jdbc-and-flyway</module>
         <module>week13-http-boundary</module>
+        <module>week14-application-server</module>
     </modules>
 
     <dependencies>
