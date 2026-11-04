@@ -135,4 +135,22 @@ class ArchitectureTest {
             .that().areDeclaredInClassesThat().resideInAPackage("..sales.persistence..")
             .and().arePublic()
             .should().declareThrowableOfType(java.sql.SQLException.class);
+
+    // ADR-0009 HTTP boundary
+    @ArchTest
+    static final ArchRule rest_sees_only_the_contract = noClasses()
+            .that().resideInAPackage("..sales.rest..")
+            .should().dependOnClassesThat()
+            .resideInAnyPackage("..sales.domain..", "..sales.application..", "..sales.persistence..");
+
+    @ArchTest
+    static final ArchRule nothing_depends_on_rest = noClasses()
+            .that().resideOutsideOfPackage("..sales.rest..")
+            .should().dependOnClassesThat().resideInAPackage("..sales.rest..");
+
+    @ArchTest
+    static final ArchRule web_libraries_stay_in_rest = noClasses()
+            .that().resideOutsideOfPackage("..sales.rest..")
+            .should().dependOnClassesThat()
+            .resideInAnyPackage("com.fasterxml.jackson..", "com.sun.net.httpserver..", "jakarta.validation..");
 }
