@@ -19,6 +19,8 @@ import com.lectures.business.design.sales.persistence.JdbcCustomerRepository;
 import com.lectures.business.design.sales.persistence.JdbcOrderRepository;
 import com.lectures.business.design.sales.persistence.OrderRepository;
 import com.lectures.business.design.sales.persistence.SequenceOrderIdGenerator;
+import com.lectures.business.design.sales.rest.RequestValidator;
+import com.lectures.business.design.sales.rest.SalesHttpServer;
 import java.time.Clock;
 import java.util.Objects;
 import javax.sql.DataSource;
@@ -74,5 +76,9 @@ public final class SalesModule {
 
     public OrderActivityLog activityLog() {
         return activityLog;
+    }
+
+    public SalesHttpServer startHttpApi(int port) {
+        return SalesHttpServer.start(port, orderService, RequestValidator.withoutExpressionLanguage());
     }
 }
