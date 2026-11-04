@@ -1,0 +1,181 @@
+type: collection.insomnia.rest/5.0
+schema_version: "5.1"
+name: Study Notes
+meta:
+  id: wrk_e32b1d6fa1a84a4b9602a0f031d32b5e
+  created: 1793776411875
+  modified: 1793776429344
+  description: ""
+collection:
+  - url: localhost:8080/orders
+    name: Create Valid Order
+    meta:
+      id: req_949d4b1565dc4361ad17b4d7b3e7ed5e
+      created: 1793776436755
+      modified: 1793776536672
+      isPrivate: false
+      description: ""
+      sortKey: -1793776436755
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerId": "VINET",
+        	"lines": [
+        		{
+        			"productId": 11,
+        			"unitPrice": 14.00,
+        			"quantity": 10
+        		}
+        	]
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: localhost:8080/orders
+    name: Invalid Order Request
+    meta:
+      id: req_125a908286024ab0ba3dc2a8011716e0
+      created: 1793776698364
+      modified: 1793776717536
+      isPrivate: false
+      description: ""
+      sortKey: -1791747990160.5
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerId": " ",
+        	"lines": [
+        		{
+        			"productId": 0,
+        			"unitPrice": 14.001,
+        			"quantity": 0,
+        			"discount": 1.5
+        		}
+        	]
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: localhost:8080/orders/10248/ship
+    name: Send With Invalid State
+    meta:
+      id: req_fbdd673e79234a39a6c692f8f240753c
+      created: 1793776828495
+      modified: 1793776850131
+      isPrivate: false
+      description: ""
+      sortKey: -1790733766863.25
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: localhost:8080/orders/99999
+    name: None Exist Order
+    meta:
+      id: req_a3eb6bd43b1b4aaf94265f4bddfff316
+      created: 1793776961439
+      modified: 1793776969528
+      isPrivate: false
+      description: ""
+      sortKey: -1790226655214.625
+    method: GET
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: localhost:8080/orders/10248/ship
+    name: Go with Wrong Method
+    meta:
+      id: req_4cf3ec00586d4ab89b6d30c537c8883f
+      created: 1793777035383
+      modified: 1793777040010
+      isPrivate: false
+      description: ""
+      sortKey: -1789973099390.3125
+    method: GET
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: localhost:8080/orders/10248/confirm
+    name: Confirm Order
+    meta:
+      id: req_f70b2b0cc0244e8c9f2a24e6de46fb82
+      created: 1793777119333
+      modified: 1793777138245
+      isPrivate: false
+      description: ""
+      sortKey: -1790480211038.9375
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: localhost:8080/orders/10248/ship
+    name: Ship Order
+    meta:
+      id: req_db9d260189114061a687ee2b2a2a04cd
+      created: 1793777222508
+      modified: 1793777230673
+      isPrivate: false
+      description: ""
+      sortKey: -1790353433126.7812
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+cookieJar:
+  name: Default Jar
+  meta:
+    id: jar_a139ee2b68ca66312fd96cafa7a69722ab8c0858
+    created: 1793776411877
+    modified: 1793776411877
+environments:
+  name: Base Environment
+  meta:
+    id: env_a139ee2b68ca66312fd96cafa7a69722ab8c0858
+    created: 1793776411876
+    modified: 1793776411876
+    isPrivate: false
