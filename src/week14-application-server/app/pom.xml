@@ -12,11 +12,12 @@
     </parent>
 
     <artifactId>week14-app</artifactId>
-    <packaging>jar</packaging>
+    <packaging>war</packaging>
     <name>Week 14 / app</name>
     <description>
-        Entry point and the anemic counter-examples. An application module may
-        print to the console; that is why it stays out of the ArchUnit scope.
+        The deployable web application. What used to be SalesModule and the
+        main methods is now a handful of CDI producers and a startup observer;
+        the server does the rest. Stays out of the ArchUnit scope.
     </description>
 
     <dependencies>
@@ -29,12 +30,6 @@
             <artifactId>week14-shared-kernel</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.lectures</groupId>
-            <artifactId>week14-sales</artifactId>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
         </dependency>
@@ -44,12 +39,21 @@
             <scope>runtime</scope>
         </dependency>
         <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-        </dependency>
-        <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.platform</groupId>
+            <artifactId>jakarta.jakartaee-web-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.microprofile.config</groupId>
+            <artifactId>microprofile-config-api</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <finalName>sales</finalName>
+    </build>
 </project>
