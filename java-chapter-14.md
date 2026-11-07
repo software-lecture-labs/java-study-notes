@@ -467,6 +467,249 @@ Uygulamayı henüz bir sunucuda çalıştırmıyoruz zira HTTP katmanımız hala
 
 ![all tests passing](./images/week_14_05.png)
 
+## Transaction Sınırını Senaryoya Taşıma
+
+Hatırlayacağınız üzere daha önce tasarladığımız **JdbcOrderRepository** sınıfının **save** metodu kendi transaction'ını kendisi yönetiyordu. Bağlantıyı alıyor, **setAutoCommit** çağrısı ile otomatik onayı kapatıyor, sipariş başlığını ve satırlarını yazıyor ve her şey yolundaysa **commit**, değilse **rollback** işlemlerini icra ediyordu. Bu yaklaşım tek bir aggregate'i kaydetmek için oldukça yeterliydi. Ancak bu yaklaşımın bazı önemli zaafları da var.
+
+- **Birden fazla yazma işlemi olabilir.** **placeOrder** metodu önce veritabanı sekansından *(sequence)* bir numara alıyor, ardından müşteriyi okuyor ve son olarak da siparişi kaydediyor. Yarın aynı senaryoya bir stok rezervasyonu veya bir outbox kaydı eklemek istediğimizde her repository kendi transaction'ını açıp kapatırsa bu işlemlerin hepsinin bir bütün olarak başarılı ya da başarısız olmasını garanti edemeyiz.
+- **Commit kararını yanlış katman veriyor.** Bir işin ne zaman bittiğini bilen yer use case'dir. Repository sadece *"nasıl yazılır"* sorusunun cevabını bilmeli.
+- **Uygulama sunucusunda bu kod çalışmaz!** Sunucu tarafındaki bağlantı *(connection)* havuzundan aldığımız bir bağlantı, devam eden bir **JTA transaction**'ına dahil edildiğinde *(enlisted)*, o bağlantı üzerinde **commit**, **rollback** veya **setAutoCommit** çağırmak yasaktır. Transaction'ın sahibi artık bağlantı değil, sunucunun **transaction yöneticisidir** *(Transaction Manager)*. Payara böyle bir çağrıda kuvvetle muhtemel **SQLException** fırlatacaktır.
+
+Bu nedenlerden dolayı transaction yönetimini repository'den alıp kullanım senaryosunu ele aldığımız yere, yani **OrderService** sınıfına taşıyacağız.
+
+### Repository Commit Etmeyi Bırakıyor
+
+Yapmamız gereken tek şey **JdbcOrderRepository** sınıfındaki **save** metodunu aşağıdaki gibi sadeleştirmek.
+
+```java
+@Override
+public void save(Order order) {
+    Objects.requireNonNull(order, "order must not be null");
+    try (Connection connection = dataSource.getConnection()) {
+        if (writeOrder(connection, UPDATE_ORDER, order) == 0) {
+            writeOrder(connection, INSERT_ORDER, order);
+        }
+        replaceLines(connection, order);
+    } catch (SQLException e) {
+        throw new RepositoryException("could not save order " + order.orderId(), e);
+    }
+}
+```
+
+SQL cümlelerine ve `update-then-insert` yaklaşımına dokunmadık. Sadece transaction ile ilgili satırlar kalktı. Bu değişikliğe göre test sonuçlarını tekrardan değerlendirelim.
+
+```powershell
+mvn -pl sales -am test "-Dtest=JdbcOrderRepositoryTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+Sözleşme testlerinden **saveIsAtomic**'in kırılması gerekiyor.
+
+![Fail at save is atomic](./images/week_14_06.png)
+
+Bu test sipariş satırları tablosuna *"miktar 7 olamaz"* şeklinde sabote edici bir kısıt *(constraint)* ekleyerek kaydı yarıda kesen testti. Testin beklentisi yarım kalan bir kaydın veritabanında hiç iz bırakmamasıydı. Artık repository bir transaction açmadığı için bağlantı varsayılan **auto-commit** modunda çalışıyor. Sipariş başlığı yazılıp hemen onaylanıyor, satır eklenirken hata oluşuyor ve veritabanında satırları olmayan bir sipariş kalıyor. Yani test tam olarak olması gereken şeyi yakaladı. Bir başka deyişle atomiklik garantisi repository'den çıktı repository'yi çağıran tarafın sorumluluğuna bırakıldı.
+
+### Test İçin Küçük Bir Transaction Yöneticisi
+
+Şimdi durup düşünelim. Test tarafında bu garantiyi nasıl sağlayabiliriz? Sunucuda **JTA *(Java Transaction API)***'nın yaptığı şeyi kabaca şöyle özetleyebiliriz. Bir transaction başladığında bağlantı havuzu o thread'e bir fiziksel bağlantı ayırır. Transaction süresince aynı thread üzerinden yapılan her **getConnection** çağrısı bu bağlantıyı paylaşır *(connection sharing)*. Kodun bağlantıyı kapatması *(close)* transaction'ı sonlandırmaz, bunun yerine sadece bağlantıyı havuza iade edilmiş gibi gösterir. Transaction bittiğinde ise transaction yöneticisi **commit** veya **rollback** kararını verir.
+
+Bu davranışı ispat edecek bir kodu test kodunda yazabiliriz. `sales` modülünün test kodlarındaki `persistence` paketine aşağıdaki **LocalTransactions** sınıfını ekleyelim.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.Objects;
+import javax.sql.DataSource;
+
+public final class LocalTransactions {
+
+    private final DataSource target;
+    private final ThreadLocal<Connection> current = new ThreadLocal<>();
+
+    public LocalTransactions(DataSource target) {
+        this.target = Objects.requireNonNull(target, "target must not be null");
+    }
+
+    public DataSource dataSource() {
+        return proxy(DataSource.class, (method, args) -> {
+            Connection bound = current.get();
+            if (bound != null && method.getName().equals("getConnection")) {
+                return shared(bound);
+            }
+            return method.invoke(target, args);
+        });
+    }
+
+    public void inTransaction(Runnable work) {
+        Objects.requireNonNull(work, "work must not be null");
+        try (Connection connection = target.getConnection()) {
+            connection.setAutoCommit(false);
+            current.set(connection);
+            try {
+                work.run();
+                connection.commit();
+            } catch (RuntimeException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                current.remove();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("the test transaction failed", e);
+        }
+    }
+
+    private static Connection shared(Connection connection) {
+        return proxy(Connection.class, (method, args) -> method.getName().equals("close")
+                ? null
+                : method.invoke(connection, args));
+    }
+
+    @FunctionalInterface
+    private interface Handler {
+
+        Object handle(Method method, Object[] args) throws Exception;
+    }
+
+    private static <T> T proxy(Class<T> type, Handler handler) {
+        return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type},
+                (proxy, method, args) -> {
+                    try {
+                        return handler.handle(method, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                }));
+    }
+}
+```
+
+Burada JDK'nın **dinamik proxy** *(`java.lang.reflect.Proxy`)* mekanizmasını kullanıyoruz. **dataSource** metodunun döndürdüğü nesne gerçek bir **DataSource** gibi davranıyor. Ancak bir transaction açıksa **getConnection** çağrılarına hep aynı bağlantıyı veriyor. **shared** metodu ise bağlantının **close** çağrısını tabir yerindeyse yutuyor. **ThreadLocal** kullanımı, transaction'ın thread'e bağlı olmasını sağlıyor. Sunucudaki transaction yöneticisi ise transaction'ı aynı şekilde o anki thread ile ilişkilendiriyor.
+
+> Bu sınıfı üretim kodunda kullanmayacağız! Amacımız, sunucunun yaptığı işi bir kez kendimiz gözlemlemek ve repository'yi testte aynı koşullar altında da çalıştırabilmek. Burada da JTA'nın en temel işini elle yazmış olduk.
+
+Şimdi **JdbcOrderRepositoryTest** sınıfını bu yapıyı kullanacak şekilde düzenleyelim. Önce bir alan ekleyip **createRepository** metodunda veri kaynağını ele alalım.
+
+```java
+private DataSource dataSource;
+private LocalTransactions transactions;
+
+...
+
+@Override
+protected OrderRepository createRepository() {
+    transactions = new LocalTransactions(TestDatabases.h2());
+    dataSource = transactions.dataSource();
+    seedCustomers(dataSource);
+    return new JdbcOrderRepository(dataSource);
+}
+```
+
+Ardından kırılan **saveIsAtomic** testini iki teste ayıralım. Biri transaction içinde atomikliğin korunduğunu, diğeri ise transaction olmadan repository'nin artık atomik olmadığını belgeliyor. Aslında ikinci test bir hata değil, sadece repository'nin yeni sözleşmesini anlatıyor.
+
+```java
+@Test
+@DisplayName("inside a transaction a failed save leaves no half-written aggregate behind")
+void saveIsAtomicInsideATransaction() throws SQLException {
+    sabotageQuantitySeven();
+
+    assertThatThrownBy(() -> transactions.inTransaction(() -> repository.save(OrderBuilder.anOrder()
+            .withId(10301).forCustomer("VINET").withLine(11, "14.00", 7).build())))
+            .isInstanceOf(RepositoryException.class);
+    assertThat(repository.findById(OrderId.of(10301))).isEmpty();
+    assertThat(repository.count()).isEqualTo(4);
+}
+
+@Test
+@DisplayName("without a transaction the repository writes statement by statement")
+void saveIsNotAtomicOnItsOwn() throws SQLException {
+    sabotageQuantitySeven();
+
+    assertThatThrownBy(() -> repository.save(OrderBuilder.anOrder()
+            .withId(10302).forCustomer("VINET").withLine(11, "14.00", 7).build()))
+            .isInstanceOf(RepositoryException.class);
+    assertThat(repository.findById(OrderId.of(10302)))
+            .hasValueSatisfying(order -> assertThat(order.lines()).isEmpty());
+}
+
+private void sabotageQuantitySeven() throws SQLException {
+    try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+        statement.execute("ALTER TABLE order_lines ADD CONSTRAINT ck_sabotage CHECK (quantity <> 7)");
+    }
+}
+```
+
+Testleri tekrar çalıştırdığımızda hepsinin geçmesi gerekir. Sözleşme testlerinin geri kalanı transaction olmadan *(auto-commit modunda)* çalışmaya devam etmelidir. Zira onlar tek bir **SQL** cümlesinin yarıda kalabileceği senaryoları değil verinin doğru yazılıp doğru okunduğunu doğrular.
+
+```powershell
+mvc clean install
+```
+
+![All test passed](./images/week_14_07.png)
+
+### @Transactional Anotasyonu ile Kullanım Senaryosu = Transaction
+
+Sunucu tarafında bu işi **Jakarta Transactions** *(JTA)* spesifikasyonunun `@Transactional` anotasyonu devralacak. Buunun için **OrderService** sınıfını aşağıdaki gibi işaretlememiz yeterli.
+
+```java
+import jakarta.transaction.Transactional;
+
+@ApplicationScoped
+@Transactional
+public class OrderService implements OrderingFacade {
+```
+
+Bu anotasyon bir **interceptor binding**. CDI, **OrderService** için ürettiği alt sınıfa her public metodun etrafını saran bir kod ekler. Metot çağrıldığında önce bir transaction başlatılır. Eğer metot beklendiği gibi normal şekilde dönüş yaparsa commit işlemler commit edilir ve transaction sonlanır, bir **RuntimeException** fırlatırsa **rollback** yapılır. *(Elle yazdığımız **LocalTransactions.inTransaction** metodunun yaptığı iş tam olarak buydu)* Anotasyonu sınıf seviyesinde kullandığımız için tüm kullanım senaryoları aynı kurala tabi oluyor.
+
+Bir **placeOrder** çağrısında neler olduğunu adım adım değerlendirelim.
+
+1. CDI proxy çağrıyı yakalar ve **Transactional** interceptor bir JTA transaction'ı başlatır.
+2. **SequenceOrderIdGenerator**, **getConnection** ile havuzdan bir bağlantı alır. Payara bu bağlantıyı transaction'a dahil eder ve **nextval** sorgusu çalışır.
+3. **JdbcCustomerRepository** müşteriyi okumak için tekrar **getConnection** çağırır. Aynı transaction içinde olduğumuz için **Payara** aynı fiziksel bağlantıyı taraflara arasında paylaştırır.
+4. **JdbcOrderRepository** sipariş başlığını ve satırlarını yine aynı bağlantı üzerinden yazar ve bağlantıyı kapatır. Kapatma işlemi transaction'ı bitirmez.
+5. Metot sonucu geri döner. Interceptor transaction'ı commit eder. *(Bir hata oluşmuşsa başlık ve satırların hepsi birlikte geri alınırdı)*
+
+Bu noktada `@Transactional` anotasyonunun hangi hatada ne yaptığını bilmekte de yarar var. Aşağıdaki tabloda bu durumu özetleyelim.
+
+| **Durum** | **Varsayılan davranış** | **Değiştirmek için** |
+| --- | --- | --- |
+| Metot normal şekilde döner | Commit | - |
+| **RuntimeException** *(örneğin bir DomainException veya RepositoryException)* | Rollback, exception aynen fırlatılır | **dontRollbackOn** |
+| Checked exception | **Commit**, exception aynen fırlatılır | **rollbackOn** |
+| Commit sırasında hata *(örneğin veritabanı kısıtı)* | Rollback, **TransactionalException** fırlatılır | - |
+
+Checked exception'larda commit yapılması ilk bakışta şaşırtıcı gelebilir. Checked exception'lar *"beklenen iş sonuçları"* olarak kabul edilir. Bizim domain exception'larımız **RuntimeException** sınıfından türediği için bu konuda bir sürprizle karşılaşmamamız gerekiyor. Diğer yandan anotasyonun bir de **value** niteliği *(TxType)* var. Varsayılan değeri `REQUIRED`, yani *"bir transaction varsa ona katıl, yoksa yeni bir tane başlat"*. Diğer seçenekler `REQUIRES_NEW`, `MANDATORY`, `SUPPORTS`, `NOT_SUPPORTED` ve `NEVER` şeklinde. *(Bu seçeneklerin hangi senaryolarda kullanıldığını araştıralım)*
+
+Burada dikkat edilmesi gereken bir tuzak da var. Interceptor nesnesi proxy üzerinde çalıştığı için sınıfın kendi içinden yapılan çağrılar *(self-invocation)* interceptor'dan geçmez. Örneğin **confirm** metodu içinden `this.ship(...)` çağrılsaydı **ship** metodunun `@Transactional` ayarları hiç devreye girmezdi. Biz şu an tüm metotları sınıf seviyesinde aynı ayarla çalıştırdığımız ve ortak işi **private** bir metotta *(change)* topladığımız için bu tuzağa düşmüyoruz. Ancak metot bazında farklı **TxType** değerleri kullanmaya başladığımızda bu ayrıntı önem kazanacak *(Bu durumu test edip ispatlamaya çalışalım)*
+
+Payara üzerinde bir JTA transaction'ı başlatıldıktan sonra ondan bağlantı alan veri kaynakları transaction'a otomatik olarak dahil edilir. Bizim `@DataSourceDefinition` ile tanımladığımız havuz XA *(extended architecture)* desteği olmayan sıradan bir **DataSource**. Tek bir veritabanıyla çalıştığımız için bu yeterli. İki farklı veritabanını veya bir veritabanı ile bir mesaj kuyruğunu aynı transaction'a dahil etmek istersek XA sürücülerine ve **iki aşamalı onay** *(two-phase commit)* gibi mekanizmalara da ihtiyaç duyarız. *(Bu kavramı ve neden pek sevilmediğini de bir araştıralım)*
+
+> .NET tarafında bu yaklaşımın en yakın karşılığı **TransactionScope** sınıfıdır. `using var scope = new TransactionScope();` ile açılan bir kapsam içindeki ADO.NET bağlantıları ortam transaction'ına *(ambient transaction)* otomatik olarak dahil olur ve `scope.Complete()` çağrılmazsa her şey geri alınır. Fark, Jakarta EE'de bu kapsamı bir anotasyonla bildirmemiz ve sınırları kodun içine değil metot imzasına yerleştirmemizdir (Hangisi daha endüstriyel olarak tercih edilir tartışalım)
+
+### Sequence Değerleri ve Geri Alma *(Rollback)*
+
+Bir rollback her şeyi geri almaz. **placeOrder** sırasında müşteri bulunamazsa ya da bir sipariş satırı domain kuralını ihlal ederse transaction geri alınır ama `nextval('orders_seq')` ile alınan numara geri gelmez. Veritabanı sekansları performans nedeniyle transaction'lardan bağımsız çalışır. Sonuç olarak sipariş numaralarında boşluklar *(gaps)* oluşabilir. **10250** numaralı siparişten sonra **10253** gelebilir. Bu bir hata değil, sekansların bilinen ve kabul edilen bir özelliği olarak düşünülmelidir. Eğer iş kuralı boşluksuz bir numaralandırma istiyorsa *(örneğin fatura numaraları)* farklı bir çözüm üzerinde düşünmek gerekiyor.
+
+### Henüz Çözmediğimiz Bir Sorun
+
+**OrderService** sınıfındaki **change** metoduna tekrar bakalım.
+
+```java
+private OrderSummary change(int orderId, Consumer<Order> action) {
+    Order order = orders.getById(OrderId.of(orderId));
+    action.accept(order);
+    orders.save(order);
+    events.publishAll(order.pullEvents());
+    return mapper.toSummary(order);
+}
+```
+
+Olaylar **save** çağrısından sonra yayınlanıyor. Aslında bu sıralamayı bilinçli olarak seçmiştik. Ne var ki artık save çağrısı veritabanına bir şey onaylamıyor. Commit işlemi, metot çağrısından dönüldükten sonra interceptor tarafından yapılıyor. Yani **ShipmentNotificationHandler** müşteriye *"siparişiniz kargolandı"* mesajını gönderdiğinde, sipariş henüz veritabanında kargolanmış görünmüyor. Commit sırasında bir sorun çıkarsa müşteri hiç gerçekleşmemiş bir kargo için bildirim almış olacaktır. Bu sorunu CDI olayları ile çözmeyi deneyeceğiz.
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
