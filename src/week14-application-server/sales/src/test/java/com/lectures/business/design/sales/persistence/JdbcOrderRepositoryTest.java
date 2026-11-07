@@ -20,6 +20,7 @@ import com.lectures.business.design.shared.kernel.Address;
 class JdbcOrderRepositoryTest extends OrderRepositoryContract {
 
     private DataSource dataSource;
+    private LocalTransactions transactions;
 
     static void seedCustomers(DataSource dataSource) {
         CustomerRepository customers = new JdbcCustomerRepository(dataSource);
@@ -31,7 +32,8 @@ class JdbcOrderRepositoryTest extends OrderRepositoryContract {
 
     @Override
     protected OrderRepository createRepository() {
-        dataSource = TestDatabases.h2();
+        transactions = new LocalTransactions(TestDatabases.h2());
+        dataSource = transactions.dataSource();
         seedCustomers(dataSource);
         return new JdbcOrderRepository(dataSource);
     }
@@ -46,17 +48,33 @@ class JdbcOrderRepositoryTest extends OrderRepositoryContract {
     }
 
     @Test
-    @DisplayName("a failed save leaves no half-written aggregate behind")
-    void saveIsAtomic() throws SQLException {
-        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-            statement.execute("ALTER TABLE order_lines ADD CONSTRAINT ck_sabotage CHECK (quantity <> 7)");
-        }
+    @DisplayName("inside a transaction a failed save leaves no half-written aggregate behind")
+    void saveIsAtomicInsideATransaction() throws SQLException {
+        sabotageQuantitySeven();
 
-        assertThatThrownBy(() -> repository.save(OrderBuilder.anOrder()
-                .withId(10301).forCustomer("VINET").withLine(11, "14.00", 7).build()))
+        assertThatThrownBy(() -> transactions.inTransaction(() -> repository.save(OrderBuilder.anOrder()
+                .withId(10301).forCustomer("VINET").withLine(11, "14.00", 7).build())))
                 .isInstanceOf(RepositoryException.class);
         assertThat(repository.findById(OrderId.of(10301))).isEmpty();
         assertThat(repository.count()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("without a transaction the repository writes statement by statement")
+    void saveIsNotAtomicOnItsOwn() throws SQLException {
+        sabotageQuantitySeven();
+
+        assertThatThrownBy(() -> repository.save(OrderBuilder.anOrder()
+                .withId(10302).forCustomer("VINET").withLine(11, "14.00", 7).build()))
+                .isInstanceOf(RepositoryException.class);
+        assertThat(repository.findById(OrderId.of(10302)))
+                .hasValueSatisfying(order -> assertThat(order.lines()).isEmpty());
+    }
+
+    private void sabotageQuantitySeven() throws SQLException {
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE order_lines ADD CONSTRAINT ck_sabotage CHECK (quantity <> 7)");
+        }
     }
 
     @Test

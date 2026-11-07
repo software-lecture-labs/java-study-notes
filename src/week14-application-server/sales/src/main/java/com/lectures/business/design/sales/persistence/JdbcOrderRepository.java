@@ -62,17 +62,10 @@ public final class JdbcOrderRepository implements OrderRepository {
     public void save(Order order) {
         Objects.requireNonNull(order, "order must not be null");
         try (Connection connection = dataSource.getConnection()) {
-            connection.setAutoCommit(false);
-            try {
-                if (writeOrder(connection, UPDATE_ORDER, order) == 0) {
-                    writeOrder(connection, INSERT_ORDER, order);
-                }
-                replaceLines(connection, order);
-                connection.commit();
-            } catch (SQLException | RuntimeException e) {
-                connection.rollback();
-                throw e;
+            if (writeOrder(connection, UPDATE_ORDER, order) == 0) {
+                writeOrder(connection, INSERT_ORDER, order);
             }
+            replaceLines(connection, order);
         } catch (SQLException e) {
             throw new RepositoryException("could not save order " + order.orderId(), e);
         }
@@ -92,8 +85,6 @@ public final class JdbcOrderRepository implements OrderRepository {
     @Override
     public List<Order> findAll(Specification<Order> specification) {
         Objects.requireNonNull(specification, "specification must not be null");
-        // Honest but expensive: every order is loaded, then filtered in memory.
-        // Turning a Specification into a WHERE clause is what JPA Criteria does for us.
         return findAll().stream()
                 .filter(specification::isSatisfiedBy)
                 .toList();
