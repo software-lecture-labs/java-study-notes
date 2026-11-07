@@ -14,6 +14,7 @@ import com.lectures.business.design.sales.persistence.OrderRepository;
 import com.lectures.business.design.shared.kernel.Money;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.Currency;
@@ -21,6 +22,7 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 @ApplicationScoped
+@Transactional
 public class OrderService implements OrderingFacade {
 
     private static final Currency TRY = Currency.getInstance("TRY");
