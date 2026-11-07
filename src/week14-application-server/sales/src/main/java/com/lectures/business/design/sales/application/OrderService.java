@@ -12,13 +12,16 @@ import com.lectures.business.design.sales.domain.OrderId;
 import com.lectures.business.design.sales.persistence.CustomerRepository;
 import com.lectures.business.design.sales.persistence.OrderRepository;
 import com.lectures.business.design.shared.kernel.Money;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.Currency;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-public final class OrderService implements OrderingFacade {
+@ApplicationScoped
+public class OrderService implements OrderingFacade {
 
     private static final Currency TRY = Currency.getInstance("TRY");
 
@@ -29,6 +32,16 @@ public final class OrderService implements OrderingFacade {
     private final Clock clock;
     private final DomainEventPublisher events;
 
+    protected OrderService() {
+        this.orders = null;
+        this.customers = null;
+        this.factory = null;
+        this.mapper = null;
+        this.clock = null;
+        this.events = null;
+    }
+
+    @Inject
     public OrderService(OrderRepository orders, CustomerRepository customers,
             OrderFactory factory, OrderMapper mapper, Clock clock, DomainEventPublisher events) {
         this.orders = Objects.requireNonNull(orders, "orders must not be null");

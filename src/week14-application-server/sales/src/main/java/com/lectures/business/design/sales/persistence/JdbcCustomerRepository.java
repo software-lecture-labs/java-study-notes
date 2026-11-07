@@ -7,10 +7,13 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import jakarta.enterprise.context.Dependent;
+import jakarta.inject.Inject;
 import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
 
+@Dependent
 public final class JdbcCustomerRepository implements CustomerRepository {
 
     private static final String UPDATE_CUSTOMER = """
@@ -30,6 +33,7 @@ public final class JdbcCustomerRepository implements CustomerRepository {
 
     private final DataSource dataSource;
 
+    @Inject
     public JdbcCustomerRepository(DataSource dataSource) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
     }

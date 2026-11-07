@@ -25,6 +25,10 @@
             <artifactId>week14-shared-kernel</artifactId>
         </dependency>
         <dependency>
+            <groupId>jakarta.platform</groupId>
+            <artifactId>jakarta.jakartaee-web-api</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
             <scope>test</scope>
@@ -70,7 +74,6 @@
 
     <build>
         <plugins>
-            <!-- Publishes the test fixtures (OrderBuilder) to other modules -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>

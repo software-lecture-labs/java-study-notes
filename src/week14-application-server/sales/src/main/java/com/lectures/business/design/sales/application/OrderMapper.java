@@ -6,9 +6,11 @@ import com.lectures.business.design.sales.domain.CustomerId;
 import com.lectures.business.design.sales.domain.Order;
 import com.lectures.business.design.shared.kernel.Address;
 import com.lectures.business.design.shared.kernel.Money;
+import jakarta.enterprise.context.Dependent;
 import java.util.List;
 import java.util.Objects;
 
+@Dependent
 public final class OrderMapper {
 
     public OrderSummary toSummary(Order order) {

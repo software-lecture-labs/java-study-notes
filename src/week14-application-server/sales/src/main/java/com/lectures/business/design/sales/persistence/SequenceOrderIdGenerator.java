@@ -6,13 +6,17 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import jakarta.enterprise.context.Dependent;
+import jakarta.inject.Inject;
 import java.util.Objects;
 import javax.sql.DataSource;
 
+@Dependent
 public final class SequenceOrderIdGenerator implements OrderIdGenerator {
 
     private final DataSource dataSource;
 
+    @Inject
     public SequenceOrderIdGenerator(DataSource dataSource) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
     }

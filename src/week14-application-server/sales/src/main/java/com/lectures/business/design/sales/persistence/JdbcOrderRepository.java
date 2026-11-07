@@ -18,10 +18,13 @@ import java.util.Currency;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import jakarta.enterprise.context.Dependent;
+import jakarta.inject.Inject;
 import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
 
+@Dependent
 public final class JdbcOrderRepository implements OrderRepository {
 
     private static final String ORDER_COLUMNS = """
@@ -50,6 +53,7 @@ public final class JdbcOrderRepository implements OrderRepository {
 
     private final DataSource dataSource;
 
+    @Inject
     public JdbcOrderRepository(DataSource dataSource) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource must not be null");
     }

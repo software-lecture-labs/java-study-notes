@@ -8,17 +8,21 @@ import com.lectures.business.design.sales.domain.Order;
 import com.lectures.business.design.sales.domain.OrderSpecifications;
 import com.lectures.business.design.sales.persistence.OrderRepository;
 import com.lectures.business.design.shared.kernel.Money;
+import jakarta.enterprise.context.Dependent;
+import jakarta.inject.Inject;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
+@Dependent
 public final class SalesReport {
 
     private final OrderRepository repository;
     private final OrderMapper mapper;
 
+    @Inject
     public SalesReport(OrderRepository repository, OrderMapper mapper) {
         this.repository = Objects.requireNonNull(repository, "repository must not be null");
         this.mapper = Objects.requireNonNull(mapper, "mapper must not be null");
