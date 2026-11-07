@@ -23,7 +23,6 @@ public record PlaceOrderRequest(
             BigDecimal unitPrice,
             @Positive
             int quantity,
-            // The default DecimalMin/Max messages need Expression Language, hence our own wording
             @DecimalMin(value = "0", message = "must be between 0 and 1")
             @DecimalMax(value = "1", message = "must be between 0 and 1")
             @Digits(integer = 1, fraction = 2)

@@ -35,7 +35,6 @@ final class OrderResource implements HttpHandler {
             try {
                 route(exchange, exchange.getRequestMethod(), path);
             } catch (Exception failure) {
-                // The JAX-RS ExceptionMapper's job, done by hand
                 send(exchange, problems.toProblem(failure, path));
             }
         }

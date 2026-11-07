@@ -710,6 +710,67 @@ private OrderSummary change(int orderId, Consumer<Order> action) {
 
 Olaylar **save** çağrısından sonra yayınlanıyor. Aslında bu sıralamayı bilinçli olarak seçmiştik. Ne var ki artık save çağrısı veritabanına bir şey onaylamıyor. Commit işlemi, metot çağrısından dönüldükten sonra interceptor tarafından yapılıyor. Yani **ShipmentNotificationHandler** müşteriye *"siparişiniz kargolandı"* mesajını gönderdiğinde, sipariş henüz veritabanında kargolanmış görünmüyor. Commit sırasında bir sorun çıkarsa müşteri hiç gerçekleşmemiş bir kargo için bildirim almış olacaktır. Bu sorunu CDI olayları ile çözmeyi deneyeceğiz.
 
+## Sunucu ile İlk Tanışma
+
+Artık elimizde nesneleri **CDI *(Contexts and Dependency Injection)*** ile bağlanan, bağlantısını sunucudan alan, transaction sınırını kullanım senaryosunda çizen ve açılışta kendi şemasını hazırlayan bir **WAR** var. **HTTP** katmanı henüz **JAX-RS**'e taşınmadığı için dışarıya açık bir adresi yok ama uygulamanın sunucuda ayağa kalktığını ve veritabanını hazırladığını pekala görebiliriz.
+
+### Önce Hazırlıklar
+
+Payara Micro tek bir JAR dosyasından ibaret. [Payara indirme sayfasından](https://www.payara.fish/downloads/payara-platform-community-edition/) **Payara Micro 7** sürümünü *(bu notları hazırlarken 7.2026.8 sürümünü kullandık)* indirip bir klasöre koymamız yeterli. Örneklerde bu klasör `C:\payara-micro` olarak geçiyor. Payara 7 en az **Java 21** ister. **PostgreSQL** için kök klasördeki `docker-compose.yml` dosyasını kullanabiliriz.
+
+```powershell
+# Repository kök klasöründe
+docker compose up -d
+```
+
+Uygulamayı çalıştırmak içinse aşağıdaki terminal komutları ile ilerleyebiliriz.
+
+```powershell
+cd src\week14-application-server
+mvn clean install
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+Parametrelere de kısaca değinelim.
+
+| **Parametre** | **Ne işe yarar?** |
+| --- | --- |
+| `--deploy app\target\sales.war` | Açılışta yüklenecek uygulama. Context root, arşivin adından gelir *(`/sales`)*. |
+| `--systemProperties payara\local.properties` | Dosyadaki satırları sistem özelliği olarak yükler. `${MPCONFIG=...}` ifadeleri bu değerlerle çözümlenir. |
+| `--nocluster` | Payara Micro varsayılan olarak ağdaki diğer Payara Micro örneklerini bulup onlarla bir küme *(cluster)* oluşturmaya çalışır. Tek başına çalışan bir geliştirme ortamında buna ihtiyacımız yok. |
+| `--port 8080` | HTTP portu. Varsayılan değer zaten 8080 olduğu için yazmadık. |
+
+Her şey yolunda giderse aşağıdakine benzer bir ekran görüntüsü görmeliyiz.
+
+![Payara server startup](./images/week_14_08.png)
+
+Teyit için şunları da göz önünde bulunduralım.
+
+- **SalesStartup** loglarını görüyorsak CDI **Startup** olayını yayınlamış, **SalesStartup** nesnesini oluşturmuş ve constructor'ına bir **DataSource**, bir **CustomerRepository** ve bir **boolean** konfigurasyon değeri enjekte etmiş demektir.
+- Flyway veritabanına bağlanabildiyse `@DataSourceDefinition` içindeki `${MPCONFIG=...}` ifadeleri **local.properties** dosyasındaki değerlerle çözümlenmiş ve bağlantı havuzu, **WAR**'ın içindeki **PostgreSQL** sürücüsünü bulabilmiş demektir.
+- Demo müşteriler eklendiyse `sales.demo-data` anahtarı için sistem özelliği *(400)*, WAR'daki `false` değerini *(100)* ezmiş demektir.
+
+> Uygulamayı **Ctrl+C** ile durdurup aynı komutla tekrar başlattığımızda, Flyway yeni bir migration çalıştırmamalı ve **JdbcCustomerRepository** `update-then-insert` yaklaşımı sayesinde demo müşteriler hata vermeden tekrar kayıt edilebilmelidir.
+
+Veritabanının durumunu konteyner içindeki `psql` aracıyla da kontrol edebiliriz. Örnek olarak aşağıdaki terminal komutları denenebilir.
+
+```powershell
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT version, description, success FROM flyway_schema_history"
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT customer_id, company_name FROM customers"
+```
+
+![Docker sql queries](./images/week_14_09.png)
+
+### Veritabanı Yoksa Ne Olur?
+
+Bir de olumsuz senaryoyu deneyelim. PostgreSQL konteynerini durdurup *(`docker compose stop`)* uygulamayı tekrar başlatalım.
+
+![Flyway SQL Exception](./images/week_14_10.png)
+
+Uygulama hiç açılmamalıdır ki bu istediğimiz bir tepkidir *(fail fast)*. Migration çalışamadıysa şemanın hangi durumda olduğunu bilemeyiz ve istek kabul etmeye başlayan bir uygulama ilk siparişte çok daha anlaşılmaz bir hatayla karşılaşır. Sorunu açılışta, açık bir mesajla görmek her zaman daha iyidir. Konteyneri tekrar başlatıp *(`docker compose start`)* devam edebiliriz.
+
+Tarayıcıdan `http://localhost:8080/sales` adresine gidersek bir **404** sayfası görürüz. Uygulama ayakta ama henüz hiçbir HTTP kaynağı yok. Bunu yapmadan önce domain olaylarını CDI tarafına taşıyacağız.
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
