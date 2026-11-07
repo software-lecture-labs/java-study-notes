@@ -13,6 +13,10 @@ import javax.sql.DataSource;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.flywaydb.core.Flyway;
 
+/**
+ * Runs once when the application is deployed, before the first request:
+ * what Database.migrated(...) and the first lines of SalesApi.main used to do.
+ */
 @Dependent
 public class SalesStartup {
 
@@ -31,14 +35,16 @@ public class SalesStartup {
     }
 
     void onStartup(@Observes Startup startup) {
-        var result = Flyway.configure()
+        Flyway flyway = Flyway.configure()
                 .dataSource(dataSource)
                 .locations("classpath:db/migration/sales")
-                .load()
-                .migrate();
-        LOG.log(System.Logger.Level.INFO, "sales schema at version {0}", result.targetSchemaVersion);
+                .load();
+        int applied = flyway.migrate().migrationsExecuted;
+        LOG.log(System.Logger.Level.INFO, "sales schema at version {0}, {1} migration(s) applied now",
+                flyway.info().current().getVersion(), applied);
 
         if (demoData) {
+            // JdbcCustomerRepository updates before it inserts, so a restart does not fail
             customers.save(new Customer(CustomerId.of("VINET"), "Vins et alcools Chevalier",
                     new Address("59 rue de l'Abbaye", "Reims", "51100", "France")));
             customers.save(new Customer(CustomerId.of("TOMSP"), "Toms Spezialitaten",
