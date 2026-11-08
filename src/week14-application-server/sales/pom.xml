@@ -59,16 +59,34 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
+            <groupId>org.glassfish.jersey.test-framework.providers</groupId>
+            <artifactId>jersey-test-framework-provider-jdk-http</artifactId>
+            <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
+            <groupId>org.glassfish.jersey.inject</groupId>
+            <artifactId>jersey-hk2</artifactId>
+            <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.hibernate.validator</groupId>
-            <artifactId>hibernate-validator</artifactId>
+            <groupId>org.glassfish.jersey.media</groupId>
+            <artifactId>jersey-media-json-binding</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jersey.ext</groupId>
+            <artifactId>jersey-bean-validation</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse</groupId>
+            <artifactId>yasson</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.expressly</groupId>
+            <artifactId>expressly</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

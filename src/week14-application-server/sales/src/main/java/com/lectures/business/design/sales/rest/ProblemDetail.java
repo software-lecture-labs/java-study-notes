@@ -1,9 +1,9 @@
 package com.lectures.business.design.sales.rest;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
+import jakarta.json.bind.annotation.JsonbPropertyOrder;
 import java.util.List;
 
-@JsonInclude(JsonInclude.Include.NON_EMPTY)
+@JsonbPropertyOrder({"type", "title", "status", "detail", "instance", "code", "errors"})
 public record ProblemDetail(
         String type,
         String title,
@@ -21,7 +21,7 @@ public record ProblemDetail(
     }
 
     static ProblemDetail of(int status, String slug, String title, String detail, String instance) {
-        return new ProblemDetail(TYPE_BASE + slug, title, status, detail, instance, slug, List.of());
+        return new ProblemDetail(TYPE_BASE + slug, title, status, detail, instance, slug, null);
     }
 
     ProblemDetail withErrors(List<FieldError> fieldErrors) {
