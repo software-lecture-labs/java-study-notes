@@ -1,0 +1,317 @@
+type: collection.insomnia.rest/5.0
+schema_version: "5.1"
+name: Study Notes - Week 14 Sales API
+meta:
+  id: wrk_197ccb59a063aa099cf520e8aea8d1f1
+  created: 1794160000000
+  modified: 1794160000000
+  description: "Chapter 14: the sales API on Payara Micro. Set base_url in the environment."
+collection:
+  - url: "{{ _.base_url }}/orders"
+    name: Create Valid Order
+    meta:
+      id: req_d662874f36e951e355621cee3dbf6317
+      created: 1794160001000
+      modified: 1794160001000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160001000
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerId": "VINET",
+        	"lines": [
+        		{ "productId": 11, "unitPrice": 14.00, "quantity": 10 },
+        		{ "productId": 42, "unitPrice": 9.80, "quantity": 5, "discount": 0.10 }
+        	]
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders"
+    name: Invalid Order Request
+    meta:
+      id: req_69540ad8093311dc7bd0c35c5113deeb
+      created: 1794160002000
+      modified: 1794160002000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160002000
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerId": " ",
+        	"lines": [
+        		{ "productId": 0, "unitPrice": 14.001, "quantity": 0, "discount": 1.5 }
+        	]
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders"
+    name: Invalid Customer Id
+    meta:
+      id: req_167487fe7cddb61dbcbc287b66332154
+      created: 1794160003000
+      modified: 1794160003000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160003000
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerId": "VIN3T",
+        	"lines": [
+        		{ "productId": 11, "unitPrice": 14.00, "quantity": 1 }
+        	]
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders"
+    name: Unknown Customer
+    meta:
+      id: req_bc2a5d2e9a7944bd0608348271d0f3de
+      created: 1794160004000
+      modified: 1794160004000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160004000
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerId": "ALFKI",
+        	"lines": [
+        		{ "productId": 11, "unitPrice": 14.00, "quantity": 1 }
+        	]
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders"
+    name: Unknown Field
+    meta:
+      id: req_15f1067648d5bca18c6c6da3a0517479
+      created: 1794160005000
+      modified: 1794160005000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160005000
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+        	"customerID": "VINET",
+        	"lines": []
+        }
+    headers:
+      - name: Content-Type
+        value: application/json
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/10248/ship"
+    name: Send With Invalid State
+    meta:
+      id: req_7ae50cf355aec472b6970703c790474e
+      created: 1794160006000
+      modified: 1794160006000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160006000
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/10248"
+    name: Get Order
+    meta:
+      id: req_25a3fd30c639dab7862e24be3848e10a
+      created: 1794160007000
+      modified: 1794160007000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160007000
+    method: GET
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/99999"
+    name: None Exist Order
+    meta:
+      id: req_e643081cc6d87f3358d4f98f7a89d26a
+      created: 1794160008000
+      modified: 1794160008000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160008000
+    method: GET
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/10248/ship"
+    name: Go with Wrong Method
+    meta:
+      id: req_00297003dcf1c448d4e14c26540c71b5
+      created: 1794160009000
+      modified: 1794160009000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160009000
+    method: GET
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/abc"
+    name: Not a Number
+    meta:
+      id: req_21d1c397a6127a5d92ca26b701c6af45
+      created: 1794160010000
+      modified: 1794160010000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160010000
+    method: GET
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/10248/confirm"
+    name: Confirm Order
+    meta:
+      id: req_83ebcd39eca4ee46be3c365af852d157
+      created: 1794160011000
+      modified: 1794160011000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160011000
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/10248/ship"
+    name: Ship Order
+    meta:
+      id: req_6fdca49f6606a82e452e1be13244874f
+      created: 1794160012000
+      modified: 1794160012000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160012000
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+  - url: "{{ _.base_url }}/orders/10248/cancel"
+    name: Cancel Order
+    meta:
+      id: req_f7bc508c88b7a3fb5137ec57c2fe7fb0
+      created: 1794160013000
+      modified: 1794160013000
+      isPrivate: false
+      description: ""
+      sortKey: -1794160013000
+    method: POST
+    settings:
+      renderRequestBody: true
+      encodeUrl: true
+      followRedirects: global
+      cookies:
+        send: true
+        store: true
+      rebuildPath: true
+cookieJar:
+  name: Default Jar
+  meta:
+    id: jar_1cf36d02c99af5dbe074b4c1fc5cd499
+    created: 1794160000000
+    modified: 1794160000000
+environments:
+  name: Base Environment
+  meta:
+    id: env_1204ca3ff556ee4412f8f0a6e140f87e
+    created: 1794160000000
+    modified: 1794160000000
+    isPrivate: false
+  data:
+    base_url: http://localhost:8080/sales/api
