@@ -1867,6 +1867,115 @@ mvn clean install
 
 ![Order resources tests](./images/week_14_15.png)
 
+### OpenAPI Desteğinin Eklenmesi
+
+**Payara Micro**, **MicroProfile OpenAPI** spesifikasyonunu da uygular. Uygulamadaki `JAX-RS` kaynaklarını tarayıp API'nin **OpenAPI** formatındaki tarifini `/openapi` adresinde yayınlar. Bunun için tek satır kod yazmamız gerekmez. Uygulamayı başlattıktan sonra `localhost:8080/openapi` adresin gidilebilir.
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Deployed Resources
+  version: 1.0.0
+servers:
+- url: http://localhost:8080/sales
+  description: Default Server.
+paths: {}
+components: {}
+```
+
+Olası problemlerden birisi **paths** kısmının boş gelmesidir. Payara hiçbir kaynağı bulamadığında bunun sebebi kaynaklarımızın nerede durduğu ile ilgilidir. **OrderResource** sınıfı `sales` modülünde, yani WAR'ın içindeki `WEB-INF/lib/week14-sales-1.0-SNAPSHOT.jar` dosyasında yaşıyor. Payara'nın OpenAPI tarayıcısı ise varsayılan olarak sadece `WEB-INF/classes` klasörüne bakar. Bu davranışı Payara'ya özgü `mp.openapi.extensions.scan.lib` ayarı ile değiştirebiliriz. Söz konusu ayar **MicroProfile Config** üzerinden okunduğu ve uygulama çalışırken kullanıldığı için WAR'ın içindeki dosyaya yazabiliriz. Bunun için `app` modülündeki `microprofile-config.properties` dosyasının sonuna aşağıdaki satırları eklememiz gerekiyor.
+
+```properties
+# OpenAPI document at /openapi
+# Payara scans WEB-INF/classes only by default; the JAX-RS resources live in
+# the sales jar under WEB-INF/lib.
+mp.openapi.extensions.scan.lib=true
+# The api package knows no framework, so the schema of LocalDate is given here
+mp.openapi.schema.java.time.LocalDate={ "name": "LocalDate", "type": "string", "format": "date", "example": "1996-07-04" }
+```
+
+> Payara'nın OpenAPI ayarlarının tam listesini Payara Micro JAR'ının içindeki `microprofile-openapi.jar` dosyasında, **OpenApiConfiguration** sınıfının sabitlerinde görebiliriz. `javap -constants` komutu ile bu sabitlere bakmak, dokümantasyonda aradığımız bir ayarı bulmanın kestirme yollarından biri.
+
+İkinci satır, **OrderSummary** record'undaki **orderDate** alanıyla ilgili. Tarayıcı `java.time.LocalDate` tipini tanımıyor ve onu `type: object` olarak tarif ediyordu. Oysa `JSON-B` bu alanı `"1996-07-04"` gibi bir metin olarak yazıyor. Normalde bu tür düzeltmeler `@Schema` anotasyonuyla yapılır. Ancak **OrderSummary** `api` paketinde duruyor ve bu paket hiçbir framework'ü tanımamalı. MicroProfile OpenAPI, bir Java tipinin şemasını yapılandırma üzerinden vermemize de izin vermekte.
+
+Belgenin başlığını değiştirmek için **SalesRestApplication** sınıfına `@OpenAPIDefinition` anotasyonunu ekleyebiliriz. Bu sınıf `rest` paketinde duruyor ve `rest` paketi zaten framework'leri tanıyan tek paketimiz.
+
+```java
+import org.eclipse.microprofile.openapi.annotations.OpenAPIDefinition;
+import org.eclipse.microprofile.openapi.annotations.info.Info;
+
+@ApplicationPath("api")
+@OpenAPIDefinition(info = @Info(
+        title = "Northwind Sales API",
+        version = "1.0",
+        description = "Places orders and moves them through confirm, ship and cancel."))
+public class SalesRestApplication extends Application {
+```
+
+Anotasyon MicroProfile OpenAPI API'sinden geliyor. Ana `pom.xml` dosyasının `properties` kısmına `<microprofile-openapi.version>3.1.1</microprofile-openapi.version>` satırını, `dependencyManagement` kısmına ise aşağıdaki bağımlılığı ekleyelim.
+
+```xml
+<dependency>
+    <groupId>org.eclipse.microprofile.openapi</groupId>
+    <artifactId>microprofile-openapi-api</artifactId>
+    <version>${microprofile-openapi.version}</version>
+    <scope>provided</scope>
+</dependency>
+```
+
+`sales` modülünün `pom.xml` dosyasına da sürüm belirtmeden aynı bağımlılığı ekleyelim.
+
+```xml
+<dependency>
+    <groupId>org.eclipse.microprofile.openapi</groupId>
+    <artifactId>microprofile-openapi-api</artifactId>
+</dependency>
+```
+
+Uygulamayı yeniden başlatıp `/openapi` adresine tekrar baktığımızda bu kez beş işlemin tamamını görebiliyor olmalıyız.
+
+```yaml
+paths:
+  /api/orders:
+    post: ...
+  '/api/orders/{id: \d+}':
+    get: ...
+  '/api/orders/{id: \d+}/confirm':
+    post: ...
+```
+
+Ancak halen daha bir problem var. **Paths** parametresindeki regex ifadesi belgeye olduğu gibi yansımış durumda. OpenAPI standartlarına göre yol şablonu sadece `{id}` biçiminde olabilir. `{id: \d+}` geçerli bir şablon değil ve bu belgeden istemci kodu üretmeye çalışan araçlar burada hata alacaktır. Peki bu regex ifadesine gerçekten ihtiyacımız var mı? `JAX-RS` spesifikasyonu göre `/orders/abc` adresi regex olmadan da 404 döner. Regex bize bir şey kazandırmıyor gibi. Sadece belgeyi bozuyor. Öyleyse **OrderResource** sınıfındaki dört `@Path` ifadesini de sadeleştirelim.
+
+```java
+@GET
+@Path("{id}")
+public OrderSummary get(@PathParam("id") int id) {
+    return orders.getOrder(id);
+}
+
+@POST
+@Path("{id}/confirm")
+public OrderSummary confirm(@PathParam("id") int id) {
+    return orders.confirm(id);
+}
+
+// {id}/ship ve {id}/cancel da aynı şekilde
+```
+
+Bu davranışı testle sabitlemek de akıllıca olur. **OrderResourceTest** sınıfındaki **unknownRoute** testinin sonuna aşağıdaki ifadeyi ekleyebiliriz.
+
+```java
+assertThat(get("/orders/abc").statusCode()).isEqualTo(404);
+```
+
+Artık belgede servis adresleri `/api/orders/{id}`, `/api/orders/{id}/ship` gibi geçerli şablonlarla yazılıyor. **orderDate** alanı da `LocalDate` şemasına, yani `type: string, format: date` tarifine bağlanıyor. Bean Validation kısıtlarının *(`@Positive`, `@Size(max = 50)`, `@DecimalMax("1")`)* şemaya `exclusiveMinimum`, `maxItems`, `maximum` olarak kendiliğinden yansıdığına da dikkat edelim. Belgenin JSON halini `Accept: application/json` başlığıyla isteyebiliriz. **Insomnia** veya **Postman** gibi araçlar bu adresi doğrudan içe aktarıp tüm istekleri hazır hale getirebilir.
+
+> Bu noktada 8080 portunda yaşanan bir problem nedeniyle uygulamayı 8081 portundan başlattım.
+
+![OpenAPI Specs](./images/week_14_16.png)
+
+> Aslında belgemiz hala eksik. Her işlem için sadece `default` yanıtı tarif ediliyor. Sipariş oluşturmanın 201 döndüğü, doğrulama hatasının 400, durum çatışmasının 409 olduğu ve hata gövdesinin `application/problem+json` tipinde bir **ProblemDetail** olduğu belgede yazmıyor. Bu bilgileri `@APIResponse` anotasyonlarıyla eklemek mümkün. Bunu bölüm sorularında bir alıştırma olarak bırakacağız. Ayrıca Payara Micro bir Swagger UI arayüzü ile gelmiyor. Belgeyi görsel olarak incelemek için onu `editor.swagger.io` gibi bir araca yapıştırabiliriz.
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
