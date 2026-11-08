@@ -4,21 +4,17 @@ import com.lectures.business.design.sales.domain.OrderCancelled;
 import com.lectures.business.design.sales.domain.OrderConfirmed;
 import com.lectures.business.design.sales.domain.OrderEvent;
 import com.lectures.business.design.sales.domain.OrderShipped;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.Consumer;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.TransactionPhase;
 
-public final class OrderActivityLog implements Consumer<OrderEvent> {
+@Dependent
+public final class OrderActivityLog {
 
-    private final List<String> entries = new ArrayList<>();
+    private static final System.Logger LOG = System.getLogger(OrderActivityLog.class.getName());
 
-    @Override
-    public void accept(OrderEvent event) {
-        entries.add(describe(event));
-    }
-
-    public List<String> entries() {
-        return List.copyOf(entries);
+    void record(@Observes(during = TransactionPhase.AFTER_SUCCESS) OrderEvent event) {
+        LOG.log(System.Logger.Level.INFO, describe(event));
     }
 
     static String describe(OrderEvent event) {

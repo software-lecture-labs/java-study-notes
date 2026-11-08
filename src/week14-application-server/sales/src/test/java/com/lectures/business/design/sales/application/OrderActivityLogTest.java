@@ -15,12 +15,11 @@ class OrderActivityLogTest {
     @Test
     @DisplayName("the log describes every kind of order event")
     void describesEachEvent() {
-        OrderActivityLog log = new OrderActivityLog();
-        log.accept(new OrderConfirmed(OrderId.of(10248), CustomerId.of("VINET"), Money.tl("140.00")));
-        log.accept(new OrderCancelled(OrderId.of(10248), CustomerId.of("VINET"), OrderStatus.CONFIRMED));
-
-        assertThat(log.entries()).containsExactly(
-                "10248 confirmed, total 140.00 TRY",
-                "10248 cancelled while CONFIRMED");
+        assertThat(OrderActivityLog.describe(
+                new OrderConfirmed(OrderId.of(10248), CustomerId.of("VINET"), Money.tl("140.00"))))
+                .isEqualTo("10248 confirmed, total 140.00 TRY");
+        assertThat(OrderActivityLog.describe(
+                new OrderCancelled(OrderId.of(10248), CustomerId.of("VINET"), OrderStatus.CONFIRMED)))
+                .isEqualTo("10248 cancelled while CONFIRMED");
     }
 }
