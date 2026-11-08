@@ -771,6 +771,296 @@ Uygulama hiç açılmamalıdır ki bu istediğimiz bir tepkidir *(fail fast)*. M
 
 Tarayıcıdan `http://localhost:8080/sales` adresine gidersek bir **404** sayfası görürüz. Uygulama ayakta ama henüz hiçbir HTTP kaynağı yok. Bunu yapmadan önce domain olaylarını CDI tarafına taşıyacağız.
 
+## Domain Olaylarını CDI'a Devretmek
+
+Aggregate'lerin kaydettiği olayları *(domain events)* yayınlamak için **InProcessEventPublisher** sınıfını yazmıştık. Bu sınıf bir abonelik listesi tutuyor, her olayı listedeki aboneler arasında tipine göre dolaştırıyor ve uygun olanlara iletiyordu. Abonelikleri ise önce **SalesModule**, son olarak da **SalesWiring** içindeki bir producer metodu tek tek kuruyordu. **CDI** bu işin tamamını zaten yapabiliyor. Olayların commit'ten önce dağıtılması sorununa da bir çözüm olarak kullanabiliriz.
+
+### Yayıncı: `Event<T>`
+
+**OrderService** sınıfı olayları **DomainEventPublisher** arayüzü üzerinden yayınlıyor. Bu arayüzü değiştirmeyeceğiz. Sadece CDI'ın olay mekanizmasını kullanan yeni bir implementasyon yazacağız. Bunun için `sales` modülündeki `application` paketine aşağıdaki **CdiDomainEventPublisher** sınıfını ekleyelim.
+
+```java
+package com.lectures.business.design.sales.application;
+
+import com.lectures.business.design.shared.kernel.DomainEvent;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.event.Event;
+import jakarta.inject.Inject;
+import java.util.Objects;
+
+@Dependent
+public final class CdiDomainEventPublisher implements DomainEventPublisher {
+
+    private final Event<DomainEvent> events;
+
+    @Inject
+    public CdiDomainEventPublisher(Event<DomainEvent> events) {
+        this.events = Objects.requireNonNull(events, "events must not be null");
+    }
+
+    @Override
+    public void publish(DomainEvent event) {
+        events.fire(Objects.requireNonNull(event, "event must not be null"));
+    }
+}
+```
+
+`Event<DomainEvent>` tipindeki nesneyi CDI'ın kendisi sağlıyor. **fire** metodu çağrıldığında CDI, olay nesnesinin çalışma zamanındaki tipine *(runtime type)* bakar ve o tipi veya üst tiplerinden birini gözlemleyen tüm metotları bulup çağırır. *(**InProcessEventPublisher** sınıfındaki `type.isInstance(event)` kontrolüyle yapılan işin aynısı)*
+
+Pek tabii **OrderService** içine doğrudan bir `Event<DomainEvent>` enjekte edip arayüzden kurtulmayı da düşünebilirdik. Fakat bu durumda **OrderService** birim testleri CDI'a bağımlı kalırdı. **DomainEventPublisher** arayüzü burada bir çıkış portu *(outgoing port)* görevi görmekte. Sunucuda CDI ile, testlerde ise basit bir lambda operatörü ya da bir liste ile çalışabiliyoruz. Böylece **OrderService** sınıfında tek bir satır bile değiştirmemize gerek kalmadı.
+
+**InProcessEventPublisher** artık üretim kodunda kullanılmıyor. Ancak **OrderServiceEventsTest** sınıfı onu kullanarak olayların doğru sırayla ve bir kez yayınlandığını doğruluyor. Bu yüzden sınıfı silmek yerine test kodlarına taşımak çok daha mantıklı olacaktır. Paket adı aynı kaldığı için hiçbir test sınıfında değişiklik gerekmiyor.
+
+```powershell
+cd src\week14-application-server\sales\src
+git mv main/java/com/lectures/business/design/sales/application/InProcessEventPublisher.java test/java/com/lectures/business/design/sales/application/InProcessEventPublisher.java
+```
+
+> Daha önceden yazdığımız bir üretim sınıfının bir test aracına *(test double)* dönüşmesi oldukça doğal. Framework'ün işini elle yazdığımız kodlar çoğu zaman testlerde yaşamaya devam edebilir. Bir önceki adımda yazdığımız **LocalTransactions** da aynı türden bir sınıftı.
+
+### Gözlemciler ve `@Observes` Anotasyonu
+
+Abonelikleri artık kimse elle hazırlamıyor. Herhangi bir olayla ilgilenen bir sınıfın bunu kendisinin söylediği bir mekanizma var. Buna göre `application` paketindeki **ShipmentNotificationHandler** sınıfını aşağıdaki gibi düzenleyelim.
+
+```java
+package com.lectures.business.design.sales.application;
+
+import com.lectures.business.design.sales.domain.OrderShipped;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.TransactionPhase;
+import jakarta.inject.Inject;
+import java.util.Objects;
+import java.util.function.Consumer;
+
+@Dependent
+public final class ShipmentNotificationHandler implements Consumer<OrderShipped> {
+
+    private final CustomerNotifier notifier;
+
+    @Inject
+    public ShipmentNotificationHandler(CustomerNotifier notifier) {
+        this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
+    }
+
+    @Override
+    public void accept(@Observes(during = TransactionPhase.AFTER_SUCCESS) OrderShipped event) {
+        notifier.notify(event.customerId().value(),
+                "Order " + event.orderId() + " shipped on " + event.shippedDate()
+                + " to " + event.destination().city());
+    }
+}
+```
+
+Sınıf hala `Consumer<OrderShipped>` arayüzünü uyguluyor ve testlerde `new ShipmentNotificationHandler()` ile kullanılabiliyor. Değişen tek şey **accept** metodunun parametresine eklediğimiz `@Observes` anotasyonu. Bu anotasyon ilgili metodu gözlemci metoda *(observer method)* dönüştürüyor. Parametrenin tipi *(OrderShipped)* ise hangi olayların bu metoda geleceğini belirliyor. Asıl önemli kısım **during** niteliği.
+
+### Bir Olay Ne Zaman Dağıtıma Çıkmalı?
+
+Bir önceki adımın sonunda şöyle bir sorun tespit etmiştik. **OrderService** olayları `save` çağrısından sonra yayınlıyor ama commit, metot döndükten sonra interceptor tarafından yapılıyor. Yani gözlemciler veritabanında henüz onaylanmamış bir değişiklik için çalışıyor. **CDI**, bir gözlemcinin transaction akışının hangi anında çağrılacağını belirlememize olanak tanır. Bunu aşağıdaki tablo ile özetleyebiliriz.
+
+| **TransactionPhase** | **Gözlemci ne zaman çağrılır?** |
+| --- | --- |
+| `IN_PROGRESS` *(varsayılan)* | Hemen, yani **fire** çağrısı sırasında. Transaction henüz devam ediyor. |
+| `BEFORE_COMPLETION` | Commit'ten hemen önce. Gözlemci hala transaction'ın içinde ve onu geri aldırabilir. |
+| `AFTER_COMPLETION` | Transaction bittikten sonra, sonuç ne olursa olsun. |
+| `AFTER_SUCCESS` | Sadece transaction başarıyla commit edildiyse. |
+| `AFTER_FAILURE` | Sadece transaction geri alındıysa. |
+
+Müşteriye *"siparişiniz kargolandı"* demek, veritabanının bu bilgiyi kalıcı olarak kaydettiğinden emin olduktan sonra yapılması gereken bir iştir. Bu nedenle `AFTER_SUCCESS` seçeneğini kullanıyoruz. Transaction geri alınırsa gözlemci hiç çağrılmaz ve müşteri gerçekleşmemiş bir kargo için bildirim de almaz. Kullandığımız bu davranışın birkaç önemli sonucu da var.
+
+- Birim testlerimizde ortada bir JTA transaction'ı olmadığı için `AFTER_SUCCESS` gözlemcisi **fire** çağrısı sırasında çalışır. Bu sayede testlerimiz hiçbir değişiklik olmadan geçmeye devam ediyor.
+- `AFTER_SUCCESS` aşamasında commit çoktan yapılmıştır. Gözlemcide bir **exception** oluşursa **CDI** bunu loglar ama siparişin kargolanması geri alınmaz. Bu doğru bir davranıştır. Örneğin bir e-posta sunucusunun yavaş olması siparişin kargolanmasını engellememelidir.
+- Commit sonrasında gözlemci veritabanına bir şey yazmak isterse yeni bir transaction'a ihtiyaç duyar *(örneğin `@Transactional(TxType.REQUIRES_NEW)` ile işaretlenmiş bir metot üzerinden)*.
+- Commit başarılı olduktan hemen sonra, gözlemci çalışamadan sunucu çökerse bildirim hiç gönderilmez. Bu boşluğu kapatmak için olayı siparişle aynı transaction içinde bir tabloya yazıp *(outbox)* daha sonra ayrı bir süreçle göndermek düşünülebilir. *(Transactional Outbox deseni ayrıca tartışılması gereken bir konu)*
+
+**OrderActivityLog** sınıfı da bir gözlemciye dönüşüyor. Normalde kayıtları bellekteki bir listede tutuyordu. Ancak bir sunucuda sonsuza kadar büyüyen bir liste tam anlamıyla bir bellek sızıntısıdır. Bu yüzden kayıtları sunucu loguna yazmak çok daha akılcı olacak. Dolayısıyla **OrderActivityLog** sınıfını aşağıdaki hale getirerek devam edelim.
+
+```java
+package com.lectures.business.design.sales.application;
+
+import com.lectures.business.design.sales.domain.OrderCancelled;
+import com.lectures.business.design.sales.domain.OrderConfirmed;
+import com.lectures.business.design.sales.domain.OrderEvent;
+import com.lectures.business.design.sales.domain.OrderShipped;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.TransactionPhase;
+
+@Dependent
+public final class OrderActivityLog {
+
+    private static final System.Logger LOG = System.getLogger(OrderActivityLog.class.getName());
+
+    void record(@Observes(during = TransactionPhase.AFTER_SUCCESS) OrderEvent event) {
+        LOG.log(System.Logger.Level.INFO, describe(event));
+    }
+
+    static String describe(OrderEvent event) {
+        return switch (event) {
+            case OrderConfirmed confirmed ->
+                confirmed.orderId() + " confirmed, total " + confirmed.total();
+            case OrderShipped shipped ->
+                shipped.orderId() + " shipped on " + shipped.shippedDate();
+            case OrderCancelled cancelled ->
+                cancelled.orderId() + " cancelled while " + cancelled.previousStatus();
+        };
+    }
+}
+```
+
+**record** metodu **OrderEvent** nesnesini gözlemler. **OrderEvent** bir arayüz tasarımıdır. **OrderConfirmed**, **OrderShipped**, **OrderCancelled** record'ları bu arayüzü uygular. CDI bir **OrderShipped** olayını hem **ShipmentNotificationHandler** hem de **OrderActivityLog** gözlemcisine iletebilir. Gözlemci metotların **public** olması gerekmez. Onları CDI çağırır ve başka bir sınıfın çağırması da beklenmez. Bu nedenle **record** metodunu **package-private** işaretleyerek bıraktık. **entries** metodu ortadan kalktığı için **OrderActivityLogTest** sınıfında da  düzeneleme yapmalıyız. Buradaki **describesEachEvent** metodunu aşağıdaki gibi yazabiliriz.
+
+```java
+@Test
+@DisplayName("the log describes every kind of order event")
+void describesEachEvent() {
+    assertThat(OrderActivityLog.describe(
+            new OrderConfirmed(OrderId.of(10248), CustomerId.of("VINET"), Money.tl("140.00"))))
+            .isEqualTo("10248 confirmed, total 140.00 TRY");
+    assertThat(OrderActivityLog.describe(
+            new OrderCancelled(OrderId.of(10248), CustomerId.of("VINET"), OrderStatus.CONFIRMED)))
+            .isEqualTo("10248 cancelled while CONFIRMED");
+}
+```
+
+### SalesWiring Biraz Daha Küçülüyor
+
+Yapılan bu değişiklilere göre **SalesWiring** sınıfında da iyileştirmeye gitmeliyiz. Örneğin abonelikleri hazırlayan producer metoduna artık ihtiyacımız kalmadı. Benzer şekilde **eventPublisher** metodunu ve gereksiz import bildilrimlerini de kaldırabiliriz. Buna göre `app` modülündeki **SalesWiring** sınıfının son hali aşağıdaki gibi olmalıdır.
+
+```java
+@DataSourceDefinition(
+        name = "java:app/jdbc/sales",
+        className = "org.postgresql.ds.PGSimpleDataSource",
+        url = "${MPCONFIG=sales.datasource.url}",
+        user = "${MPCONFIG=sales.datasource.user}",
+        password = "${MPCONFIG=sales.datasource.password}",
+        minPoolSize = 2,
+        maxPoolSize = 10)
+@ApplicationScoped
+public class SalesWiring {
+
+    @Produces
+    @Resource(lookup = "java:app/jdbc/sales")
+    private DataSource dataSource;
+
+    @Produces
+    Clock clock() {
+        return Clock.systemUTC();
+    }
+
+    @Produces
+    OrderFactory orderFactory(OrderIdGenerator ids, Clock clock) {
+        return new OrderFactory(ids, clock);
+    }
+}
+```
+
+Composition root'tan geriye sadece üç karar kaldı. Hangi veritabanına bağlanılacağı, hangi zaman nesnesinin kullanılacağı ve domain'deki fabrikanın nasıl oluşturulacağı. **OrderService** artık bir **DomainEventPublisher** istediğinde CDI tek aday olan **CdiDomainEventPublisher** nesnesini verecektir.
+
+> .NET dünyasında bu yaklaşımın en bilinen karşılığı **MediatR** kütüphanesinin **INotification** ve `**INotificationHandler<T>` yapılarıdır. Entity Framework Core kullanan projelerde domain olaylarını **SaveChanges** sonrasında dağıtmak da yaygın bir alışkanlıktır ve `AFTER_SUCCESS` ile aynı amaca hizmet eder.
+
+Testleri çalıştırıp her şeyin yolunda olduğundan emin olmakta yarar var.
+
+```powershell
+cd src\week14-application-server
+mvn clean install
+```
+
+### Commit ve Rollback'i Sunucuda Görmek
+
+`AFTER_SUCCESS` davranışını birim testlerle doğrulamak mümkün değil zira orada bir **JTA transaction** yok. Henüz bir **HTTP** katmanımız da olmadığı için sunucuya istek de gönderemiyoruz. Bu nedenle `app` modülüne açılışta çalışan küçük bir deneme sınıfı ekleyip sonucu loglar üzerinden izleyebiliriz. Bu iki sınıfı sadece deneme amaçlı ve geçici olarak kullanacağız, denemeden sonra silmekte yarar var. 
+
+Önce **EventProbeTx** sınıfı;
+
+```java
+package com.lectures.business.design.app;
+
+import com.lectures.business.design.sales.api.OrderingFacade;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
+
+@ApplicationScoped
+public class EventProbeTx {
+
+    @Inject
+    OrderingFacade orders;
+
+    @Transactional
+    public void shipThenFail(int orderId) {
+        orders.ship(orderId);
+        throw new IllegalStateException("rolled back after ship");
+    }
+}
+```
+
+ve şimdi de **EventProbe** sınıfını ekleyelim;
+
+```java
+package com.lectures.business.design.app;
+
+import com.lectures.business.design.sales.api.OrderLineRequest;
+import com.lectures.business.design.sales.api.OrderingFacade;
+import com.lectures.business.design.sales.api.PlaceOrderCommand;
+import jakarta.annotation.Priority;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.Startup;
+import jakarta.inject.Inject;
+import java.util.List;
+
+@ApplicationScoped
+public class EventProbe {
+
+    private static final System.Logger LOG = System.getLogger("probe");
+
+    @Inject
+    OrderingFacade orders;
+    @Inject
+    EventProbeTx tx;
+
+    void run(@Observes @Priority(3000) Startup startup) {
+        int shipped = orders.placeOrder(new PlaceOrderCommand("VINET",
+                List.of(OrderLineRequest.of(11, "14.00", 10)))).orderId();
+        orders.confirm(shipped);
+        LOG.log(System.Logger.Level.INFO, "probe: shipping " + shipped);
+        orders.ship(shipped);
+        LOG.log(System.Logger.Level.INFO, "probe: " + shipped + " is " + orders.getOrder(shipped).status());
+
+        int rolledBack = orders.placeOrder(new PlaceOrderCommand("TOMSP",
+                List.of(OrderLineRequest.of(42, "9.80", 3)))).orderId();
+        orders.confirm(rolledBack);
+        try {
+            tx.shipThenFail(rolledBack);
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.INFO, "probe: caught " + e.getMessage());
+        }
+        LOG.log(System.Logger.Level.INFO, "probe: " + rolledBack + " is " + orders.getOrder(rolledBack).status());
+    }
+}
+```
+
+**EventProbeTx** sınıfındaki **shipThenFail** metodu bir transaction başlatıyor. İçinden çağrılan **ship** metodu `TxType.REQUIRED` türünden olduğu için yeni bir transaction açmak yerine mevcut olana katılıyor. Sipariş kargolanıyor, **OrderShipped** olayı yayınlanıyor ve ardından bir **exception** nesnesi fırlatılıyor. Bu exception tüm transaction'ı geri aldırıyor. Uygulamayı derleyip **Payara Micro** ile başlattığımızda loglarda bazı ipuçlarını görmemiz gerekiyor.
+
+```powershell
+cd src\week14-application-server
+mvn clean install
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+![Probe Test Sonuçları](./images/week_14_11.png)
+
+İlk sipariş için bildirim ve aktivite kaydı **ship** çağrısı tamamlandıktan, yani commit edildikten sonra yazılıyor. İkinci siparişte ise **OrderShipped** olayı yayınlandığı halde ne müşteri bildirimi ne de *"10249 shipped"* kaydı var. Sipariş veritabanında **CONFIRMED** durumunda kalmış. Gözlemciler `IN_PROGRESS` aşamasında çalışsaydı müşteri gerçekleşmemiş bir kargo için bildirim almış olacaktı *(Bunu da deneyip görelim)*.
+
+> Sipariş numaraları sizin denemenizde farklı olabilir. Önceki çalıştırmalardan kalan siparişler ve geri alınan transaction'larda oluşan sequence değerleri de bu farkı yaratır.
+
+Denemeden sonra iki sınıfı silmeyi unutmayalım.
+
+```powershell
+cd src\week14-application-server\app\src\main\java\com\lectures\business\design\app
+Remove-Item EventProbe.java, EventProbeTx.java
+```
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
