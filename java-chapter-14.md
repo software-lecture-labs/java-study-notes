@@ -2079,7 +2079,50 @@ Dört kural da beklendiği gibi kırılmalı.
 
 İlk iki madde dikkat çekici. `@Transactional` anotasyonunu sildiğimizde ya da yanlış katmana taşıdığımızda birim testlerin hiçbiri kırılmaz. Çünkü birim testlerde zaten bir JTA transaction'ı yok. Bu hatalar normal şartlarda ancak sunucuda, üstelik sadece bir şeyler ters gittiğinde *(yarım kalan bir kayıt, gönderilmemesi gereken bir bildirim)* fark edilirdi. Mimari testler bu tür *"sadece üretimde görünen"* hataları derleme hattına taşımakta. Denemeden sonra değişiklikleri geri almayı unutmayalım.
 
-// DEVAM EDECEK
+---
+
+## Bölüm Soruları
+
+1. `AFTER_SUCCESS` gözlemcileri commit'ten sonra çalışıyor ama commit ile gözlemci arasında sunucu çökerse müşteri bildirimi hiç gitmiyor. **Transactional Outbox** desenini araştıralım. Olayı siparişle aynı transaction içinde bir **outbox** tablosuna yazmak için hangi paketlerde değişiklik yapmamız gerekir?
+2. **OrderResourceTest** CDI ve JTA olmadan çalışıyor. `@Transactional` anotasyonunun gerçekten rollback yaptığını ve gözlemcilerin commit'i beklediğini otomatik olarak doğrulamak için Testcontainers ile `payara/micro` imajını ve PostgreSQL'i birlikte ayağa kaldıran bir entegrasyon testi nasıl kurgulanabilir? Bu test hangi Maven aşamasında *(test, integration-test)* ve hangi eklentiyle *(Surefire, Failsafe)* çalışmalı?
+3. OpenAPI belgesinde her işlem için sadece **default** yanıtı var. `@APIResponse` ve `@Content` anotasyonlarıyla **place** işleminin 201, 400, 404 ve 422 yanıtlarını, **ship** işleminin de 409 yanıtını belgeleyelim. Hata gövdesinin `application/problem+json` tipinde bir **ProblemDetail** olduğunu nasıl ifade ederiz?
+4. **OrderService** sınıfının tüm metotları `TxType.REQUIRED` ile çalışıyor. Sadece okuma yapan **getOrder** için `TxType.SUPPORTS` kullanmak neyi değiştirir? Commit sonrasında bir denetim kaydı *(audit log)* yazmak isteyen bir gözlemci için neden `REQUIRES_NEW` gerekir?
+5. **OrderService** sınıfına `confirm` ve `ship` metotlarını sırayla çağıran bir **confirmAndShip** metodu eklediğimizi düşünelim. Metotlar `this.confirm` şeklinde çağrılırsa bu metotlar üzerindeki `@Transactional` ayarları devreye girer mi? Neden? Bu tuzaktan kaçınmanın yolları nelerdir?
+6. **OrderResource** ve **OrderService** sınıflarını `@ApplicationScoped` yaptık. Bu sınıflara istek bazında değişen bir bilgi *(örneğin isteği yapan kullanıcının adı)* tutan bir alan eklesek ne olur? `@RequestScoped` bu durumda nasıl bir çözüm sunar ve bedeli nedir?
+7. `bean-discovery-mode="all"` kullansaydık uygulama *ambiguous dependency* hatasıyla açılmazdı. Diyelim ki bir demo ortamında bilerek in-memory repository'leri kullanmak istiyoruz. CDI'ın `@Alternative`, `@Priority` ve qualifier *(niteleyici)* kavramları bu ihtiyacı nasıl karşılar? Bu seçimin kodda mı, yapılandırmada mı yapılması daha doğru olur?
+8. Veritabanı parolasını **local.properties** dosyasında açık metin olarak tutuyoruz. Üretim ortamında bu parola nereden gelmeli? Ortam değişkenleri, Payara'nın parola takma adları *(`${ALIAS=...}`)* ve Kubernetes secret'ları arasındaki farkları araştıralım.
+9. Migration'ları uygulama açılışında çalıştırıyoruz. Aynı uygulamanın üç örneği aynı anda başlatılırsa ne olur? Uzun süren bir migration *(büyük bir tabloya kolon eklemek gibi)* sırasında yük dengeleyici *(load balancer)* uygulamaya istek göndermeye başlarsa ne yaşanır? MicroProfile Health'in **readiness** kontrolü bu soruna nasıl yardımcı olabilir?
+10. İki istemci aynı siparişi aynı anda kargolamaya ve iptal etmeye çalışıyor. Her iki istek de kendi JTA transaction'ında siparişi okuyup kaydediyor. JTA bu yarış durumunu *(lost update)* engeller mi? Veritabanının yalıtım seviyesi *(isolation level)*, bir **version** kolonu ile yapılan iyimser kilitleme *(optimistic locking)* ve Bölüm 13'teki **ETag** sorusu bu problemle nasıl ilişkilidir?
+
+## Bu bölümün kodu
+
+- [week14-application-server](src/week14-application-server)
+
+```powershell
+cd src\week14-application-server
+
+# Bölüm 14'teki tüm modüllerin testleri (Docker yoksa PostgreSQL testleri atlanır)
+mvn clean install
+
+# Yalnızca HTTP katmanı testleri
+mvn -pl sales -am test "-Dtest=OrderResourceTest,ProblemMapperTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+
+# Yalnızca mimari testler
+mvn -pl quality/architecture-tests -am test "-Dtest=ArchitectureTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+Uygulamayı **Payara Micro** üzerinde çalıştırmak için kök klasördeki **PostgreSQL** konteynerini başlatıp WAR'ı yüklemek yeterli.
+
+```powershell
+docker compose up -d
+cd src\week14-application-server
+mvn clean install
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+API `http://localhost:8080/sales/api/orders`, **OpenAPI** belgesi ise `http://localhost:8080/openapi` adresinden yayınlanır. Bağlantı bilgileri ve demo verileri `payara\local.properties` dosyasından sistem özelliği olarak okunur. Bu dosya kullanılmadığında aynı anahtarlar ortam değişkenleri ile de *(örneğin `SALES_DATASOURCE_URL`)* verilebilir. Sistem özelliklerinin önceliği ortam değişkenlerinden yüksek olduğu için ikisi birlikte verilirse dosyadaki değer kazanır. **8080** portu doluysa `--port` parametresiyle başka bir port seçilebilir.
+
+> Bu bölüme göre Insomnia ile kullanılabilecek koleksiyon dosyasına [buradan](./tools/insomnia-sales-api-week14.yaml) ulaşılabilir.
 
 <!-- nav:bottom:start -->
 ---
