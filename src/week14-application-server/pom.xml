@@ -34,6 +34,7 @@
         <hibernate-validator.version>9.0.1.Final</hibernate-validator.version>
         <jakartaee.version>11.0.0</jakartaee.version>
         <microprofile-config.version>3.1</microprofile-config.version>
+        <microprofile-openapi.version>3.1.1</microprofile-openapi.version>
         <war.plugin.version>3.4.0</war.plugin.version>
     </properties>
 
@@ -130,6 +131,12 @@
                 <groupId>org.eclipse.microprofile.config</groupId>
                 <artifactId>microprofile-config-api</artifactId>
                 <version>${microprofile-config.version}</version>
+                <scope>provided</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.microprofile.openapi</groupId>
+                <artifactId>microprofile-openapi-api</artifactId>
+                <version>${microprofile-openapi.version}</version>
                 <scope>provided</scope>
             </dependency>
         </dependencies>

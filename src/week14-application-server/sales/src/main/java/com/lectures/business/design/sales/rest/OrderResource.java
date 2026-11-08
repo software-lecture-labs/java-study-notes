@@ -44,25 +44,25 @@ public class OrderResource {
     }
 
     @GET
-    @Path("{id: \\d+}")
+    @Path("{id}")
     public OrderSummary get(@PathParam("id") int id) {
         return orders.getOrder(id);
     }
 
     @POST
-    @Path("{id: \\d+}/confirm")
+    @Path("{id}/confirm")
     public OrderSummary confirm(@PathParam("id") int id) {
         return orders.confirm(id);
     }
 
     @POST
-    @Path("{id: \\d+}/ship")
+    @Path("{id}/ship")
     public OrderSummary ship(@PathParam("id") int id) {
         return orders.ship(id);
     }
 
     @POST
-    @Path("{id: \\d+}/cancel")
+    @Path("{id}/cancel")
     public OrderSummary cancel(@PathParam("id") int id) {
         return orders.cancel(id);
     }

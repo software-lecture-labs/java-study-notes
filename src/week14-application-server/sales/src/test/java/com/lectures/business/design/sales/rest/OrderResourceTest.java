@@ -213,5 +213,8 @@ class OrderResourceTest {
 
         assertThat(response.statusCode()).isEqualTo(404);
         assertThat(response.body()).contains("\"code\":\"no-such-route\"");
+
+        // An id that is not a number cannot become an int: JAX-RS answers 404
+        assertThat(get("/orders/abc").statusCode()).isEqualTo(404);
     }
 }

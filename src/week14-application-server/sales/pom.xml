@@ -29,6 +29,10 @@
             <artifactId>jakarta.jakartaee-web-api</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.eclipse.microprofile.openapi</groupId>
+            <artifactId>microprofile-openapi-api</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
             <scope>test</scope>
