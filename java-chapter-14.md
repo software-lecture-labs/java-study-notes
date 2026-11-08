@@ -1976,6 +1976,109 @@ Artık belgede servis adresleri `/api/orders/{id}`, `/api/orders/{id}/ship` gibi
 
 > Aslında belgemiz hala eksik. Her işlem için sadece `default` yanıtı tarif ediliyor. Sipariş oluşturmanın 201 döndüğü, doğrulama hatasının 400, durum çatışmasının 409 olduğu ve hata gövdesinin `application/problem+json` tipinde bir **ProblemDetail** olduğu belgede yazmıyor. Bu bilgileri `@APIResponse` anotasyonlarıyla eklemek mümkün. Bunu bölüm sorularında bir alıştırma olarak bırakacağız. Ayrıca Payara Micro bir Swagger UI arayüzü ile gelmiyor. Belgeyi görsel olarak incelemek için onu `editor.swagger.io` gibi bir araca yapıştırabiliriz.
 
+## Mimari Kurallar ve ADR-0010
+
+Bu bölümde aldığımız kararları [ADR-0010-Uygulama Sunucusu: CDI, JTA ve JAX-RS](docs/adr/ADR-0010.md) isimli belgede topluyoruz. Kararların bir kısmı önceki ADR'ları güncelliyor. Composition root artık **SalesModule** değil *(ADR-0006)*, olaylar **InProcessEventPublisher** ile değil CDI ile dağıtılıyor *(ADR-0007)*, transaction'ı repository değil use case nesnesi yönetiyor *(ADR-0008)* ve **HTTP** katmanı `JAX-RS` üzerinde çalışıyor *(ADR-0009)*. ADR'lar kabul edildikten sonra değiştirilmediği için bu belgelere ADR-0003'te yaptığımız gibi birer not düşmekte ve yeni kararı ADR-0010'da yazmakta yarar var.
+
+Kararların bazıları kodun içinde bir kural olarak korunabilir. Bunun için **ArchitectureTest** sınıfına yeni kurallar ekleyeceğiz. Kurallar `jakarta.transaction.Transactional` ve `jakarta.enterprise.event.Observes` gibi tiplere referans verdiği için önce `quality/architecture-tests` modülünün `pom.xml` dosyasına `Jakarta EE API`'sini test kapsamında ekleyelim.
+
+```xml
+<dependency>
+    <groupId>jakarta.platform</groupId>
+    <artifactId>jakarta.jakartaee-web-api</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+Ardından **ArchitectureTest** sınıfındaki `web_libraries_stay_in_rest` kuralını `JAX-RS`, `JSON-B` ve MicroProfile OpenAPI paketlerini de kapsayacak şekilde değiştirelim. **Jackson** ve **JDK HTTP** sunucusu paketlerini listeden çıkarmıyoruz. Biri yanlışlıkla bu kütüphaneleri tekrar kullanmaya başlarsa kural yine yakalanabilmeli.
+
+```java
+@ArchTest
+static final ArchRule web_libraries_stay_in_rest = noClasses()
+        .that().resideOutsideOfPackage("..sales.rest..")
+        .should().dependOnClassesThat()
+        .resideInAnyPackage("com.fasterxml.jackson..", "com.sun.net.httpserver..", "jakarta.validation..",
+                "jakarta.ws.rs..", "jakarta.json..", "org.eclipse.microprofile.openapi..");
+```
+
+Sınıfın sonuna da aşağıdaki birim test metotlarını ekleyelim.
+
+```java
+@ArchTest
+static final ArchRule api_knows_no_framework = noClasses()
+        .that().resideInAPackage("..sales.api..")
+        .should().dependOnClassesThat().resideInAnyPackage("jakarta..", "org.eclipse.microprofile..");
+
+@ArchTest
+static final ArchRule use_cases_are_transactional = classes()
+        .that().implement(OrderingFacade.class)
+        .should().beAnnotatedWith(Transactional.class);
+
+@ArchTest
+static final ArchRule only_application_demarcates_transactions = noClasses()
+        .that().resideOutsideOfPackage("..sales.application..")
+        .should().dependOnClassesThat().resideInAPackage("jakarta.transaction..");
+
+@ArchTest
+static final ArchRule repositories_leave_commit_to_the_caller = noClasses()
+        .should().callMethod(Connection.class, "commit")
+        .orShould().callMethod(Connection.class, "rollback")
+        .orShould().callMethod(Connection.class, "setAutoCommit", boolean.class);
+
+@ArchTest
+static final ArchRule domain_event_observers_wait_for_commit = methods()
+        .that().areDeclaredInClassesThat().resideInAPackage("..sales..")
+        .should(observeDomainEventsOnlyAfterSuccess());
+
+private static ArchCondition<JavaMethod> observeDomainEventsOnlyAfterSuccess() {
+    return new ArchCondition<>("observe domain events only after a successful commit") {
+        @Override
+        public void check(JavaMethod method, ConditionEvents events) {
+            for (JavaParameter parameter : method.getParameters()) {
+                parameter.tryGetAnnotationOfType(Observes.class)
+                        .filter(observes -> parameter.getRawType().isAssignableTo(DomainEvent.class))
+                        .filter(observes -> observes.during() != TransactionPhase.AFTER_SUCCESS)
+                        .ifPresent(observes -> events.add(SimpleConditionEvent.violated(method,
+                        method.getFullName() + " observes " + parameter.getRawType().getSimpleName()
+                        + " during " + observes.during())));
+            }
+        }
+    };
+}
+```
+
+Eklediğimiz yeni birim test metotlarını aşağıdaki tabloyla özetleyebiliriz.
+
+| **Kural *(ArchRule alanı)*** | **ADR** | **Neyi Doğrular?** |
+| --- | :---: | --- |
+| **web_libraries_stay_in_rest** | 0009, 0010 | Jackson, JDK HTTP sunucusu, Bean Validation, JAX-RS, JSON-B ve MicroProfile OpenAPI tiplerinin yalnızca `sales.rest` paketinde kullanıldığını doğrular. |
+| **api_knows_no_framework** | 0010 | `sales.api` paketinin hiçbir Jakarta veya MicroProfile tipine bağımlı olmadığını doğrular. **OrderSummary** gibi tiplerin OpenAPI şemasını bu yüzden anotasyonla değil yapılandırma ile verdik. |
+| **use_cases_are_transactional** | 0010 | **OrderingFacade** arayüzünü uygulayan her sınıfın `@Transactional` ile işaretlendiğini doğrular. Biri anotasyonu silerse kullanım senaryoları atomik olmaktan çıkar ve hiçbir birim test bunu fark etmez. |
+| **only_application_demarcates_transactions** | 0010 | `jakarta.transaction` paketini sadece `sales.application` paketinin kullandığını doğrular. Bir repository'nin kendi transaction'ını başlatması *(ya da bir HTTP kaynağının transaction açması)* bu kurala takılır. |
+| **repositories_leave_commit_to_the_caller** | 0008, 0010 | Hiçbir sınıfın JDBC bağlantısı üzerinde **commit**, **rollback** veya **setAutoCommit** çağırmadığını doğrular. Bu çağrılar sunucuda, JTA'ya dahil edilmiş bir bağlantıda zaten hata verir. Kural bu hatayı derleme sonrası testlerde, sunucuya gitmeden yakalar. |
+| **domain_event_observers_wait_for_commit** | 0007, 0010 | Bir domain olayını gözlemleyen her metodun `AFTER_SUCCESS` aşamasını kullandığını doğrular. |
+
+Son kural ArchUnit'in hazır söz dizimiyle ifade edilemiyor. ArchUnit metotların ve sınıfların anotasyonlarını kolayca sorgulayabilir ama bir parametrenin anotasyonunun bir özelliğine *(`during`)* bakan hazır bir kural yok. Bu yüzden kendi koşulumuzu *(ArchCondition)* yazdık. **check** metodu analiz edilen her metot için çağrılıyor. Parametrelerden biri `@Observes` ile işaretlenmişse ve tipi bir **DomainEvent** ise anotasyonun `during` değerine bakılıyor. Değer `AFTER_SUCCESS` değilse bir ihlal kaydediyor. **tryGetAnnotationOfType** metodu, ArchUnit'in bytecode'dan okuduğu anotasyonu gerçek bir Java anotasyon nesnesine dönüştürüyor. Bu sayede `observes.during()` metodunu tip güvenli bir şekilde çağırabiliyoruz.
+
+### Kuralları Kırarak Deneyelim
+
+Bir kuralın gerçekten neyi koruduğunu anlamanın en iyi yolu onu kırmayı denemektir. Aşağıdaki değişiklikleri geçici olarak yapıp mimari testleri çalıştıralım.
+
+1. **OrderService** sınıfındaki `@Transactional` anotasyonunu silelim.
+2. **ShipmentNotificationHandler** sınıfında `TransactionPhase.AFTER_SUCCESS` yerine `TransactionPhase.IN_PROGRESS` yazalım.
+3. **JdbcOrderRepository** sınıfının **save** metodunda `replaceLines(connection, order);` satırından sonra `connection.commit();` ekleyelim.
+4. **JdbcCustomerRepository** sınıfının **save** metodunu `@Transactional` ile işaretleyelim.
+
+```powershell
+mvn -pl quality/architecture-tests -am test "-Dtest=ArchitectureTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+Dört kural da beklendiği gibi kırılmalı.
+
+![Architecture failures](./images/week_14_17.png)
+
+İlk iki madde dikkat çekici. `@Transactional` anotasyonunu sildiğimizde ya da yanlış katmana taşıdığımızda birim testlerin hiçbiri kırılmaz. Çünkü birim testlerde zaten bir JTA transaction'ı yok. Bu hatalar normal şartlarda ancak sunucuda, üstelik sadece bir şeyler ters gittiğinde *(yarım kalan bir kayıt, gönderilmemesi gereken bir bildirim)* fark edilirdi. Mimari testler bu tür *"sadece üretimde görünen"* hataları derleme hattına taşımakta. Denemeden sonra değişiklikleri geri almayı unutmayalım.
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
