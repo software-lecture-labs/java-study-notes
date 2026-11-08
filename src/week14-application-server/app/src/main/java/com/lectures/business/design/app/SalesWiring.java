@@ -9,10 +9,6 @@ import jakarta.enterprise.inject.Produces;
 import java.time.Clock;
 import javax.sql.DataSource;
 
-/**
- * What is left of SalesModule: the objects the container cannot build by
- * itself, because their classes live in the framework-free domain or in the JDK.
- */
 @DataSourceDefinition(
         name = "java:app/jdbc/sales",
         className = "org.postgresql.ds.PGSimpleDataSource",
