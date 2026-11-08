@@ -1061,6 +1061,812 @@ cd src\week14-application-server\app\src\main\java\com\lectures\business\design\
 Remove-Item EventProbe.java, EventProbeTx.java
 ```
 
+## HTTP Katmanını JAX-RS'e Taşımak
+
+**OrderResource**, **JsonCodec**, **RequestValidator** ve **ProblemMapper** sınıfları **Payara** gibi bir uygulama sunucusunda ele alındıklarında hangileri JAX-RS bileşeni olarak yaşamaya devam eder, hangileri ortadan kalkar? Aşağıdaki tabloda bu soruyu cevaplıyoruz.
+
+| **Sınıf** | **Aksiyon?** | **Yerini ne alıyor?** |
+| --- | --- | --- |
+| **SalesHttpServer** | Siliniyor | Payara Micro ve `@ApplicationPath` |
+| **JsonCodec** | Siliniyor | JSON-B *(Yasson)* ve küçük bir **JsonbConfiguration** sınıfı |
+| **RequestValidator** | Siliniyor | Parametre üzerindeki `@Valid` |
+| **MethodNotAllowed** | Siliniyor | JAX-RS runtime'ı HTTP 405 yanıtını kendisi üretir |
+| **OrderResource** | Yeniden yazılıyor | `@Path`, `@GET`, `@POST` anotasyonları |
+| **ProblemMapper** | Yaşamaya devam ediyor | İki küçük `ExceptionMapper` sınıfı onu kullanıyor |
+| **ProblemDetail** | Yaşamaya devam ediyor | Jackson anotasyonu yerine JSON-B anotasyonu |
+| **PlaceOrderRequest** | Yaşamaya devam ediyor | Expression Language geldiği için özel hata mesajları gereksiz |
+
+Altyapıyla ilgili sınıfları ortadan kaldırıyoruz ve iş kararı veren *(hangi hatanın hangi duruma karşılık geldiği, istek gövdesinin biçimi)* sınıfları ise bırakıyoruz.
+
+### Silinenler ve Bağımlılıklar
+
+Önce artık ihtiyacımız olmayan sınıfları ve onların testini silelim. Şu aşamada aşağıdaki powershell komutunu kullanabiliriz.
+
+```powershell
+cd src\week14-application-server\sales\src
+git rm main/java/com/lectures/business/design/sales/rest/JsonCodec.java `
+       main/java/com/lectures/business/design/sales/rest/MethodNotAllowed.java `
+       main/java/com/lectures/business/design/sales/rest/RequestValidator.java `
+       main/java/com/lectures/business/design/sales/rest/SalesHttpServer.java `
+       test/java/com/lectures/business/design/sales/rest/SalesHttpServerTest.java
+```
+
+Bu temizlik işlemleri ardından `sales` modülünün `pom.xml` dosyasından **Jackson** ve **Hibernate Validator** bağımlılıklarını kaldıralım. Bean Validation API'si *(`jakarta.validation`)*, JAX-RS API'si *(`jakarta.ws.rs`)* ve JSON-B API'si *(`jakarta.json.bind`)* zaten `jakarta.jakartaee-web-api` bağımlılığının içinde geliyor. Implementasyonlarını ise Payara ortamı sağlamakta. Ana `pom.xml` dosyasındaki `jackson.version` ve `hibernate-validator.version` özelliklerini ve onlara ait `dependencyManagement` kayıtlarını da silebiliriz.
+
+Bu çalışma kapsamında kullandığımız **Payara Micro 7.2026.8** sürümü içinde gelen implementasyonlara bir göz atmakta yarar var. Bunları Payara Micro JAR dosyasının `MICRO-INF/runtime` klasöründe görebiliriz. **Apache NetBeans** ile **jar** dosyasını açmamız yeterlidir.
+
+![Payara JAR content](./images/week_14_12.png)
+
+Şimdi sales WAR dosyası içerisine tekrardan bakalım.
+
+```powershell
+mvn clean install
+tar -tf app\target\sales.war
+```
+
+![Sales War içeriği](./images/week_14_13.png)
+
+**Hibernate Validator** ve `jakarta.validation-api` JAR'ları kalkmış olmalı. Ancak dikkat edileceği üzere **Jackson** hala orada *(`jackson-databind`, `jackson-core`, `jackson-dataformat-toml`)* duruyor. Bunun sebebi `flyway-core` kütüphanesi. Flyway 10, TOML formatındaki yapılandırma dosyalarını okumak için Jackson'a bağımlı. Jackson'ı daha öncesinde biz eklediğimiz için `2.21.5` sürümü kullanılıyordu ve şimdi Flyway'in istediği `2.15.2` sürümü geliyor. Bizim kodumuz artık Jackson'ı kullanmıyor ve Jersey, JSON dönüşümleri için JSON-B'yi tercih ediyor. Bir bağımlılığın kimden geldiğini öğrenmek için Maven'in **dependency:tree** argümanı aşağıdaki gibi kullanılabilir.
+
+```powershell
+mvn -pl app dependency:tree "-Dincludes=com.fasterxml.jackson.core"
+```
+
+![Dependency Tree](./images/week_14_14.png)
+
+### JAX-RS Uygulamasını Açmak
+
+`JAX-RS`'in bir WAR içinde devreye girmesi için **Application** sınıfından türeyen ve `@ApplicationPath` anotasyonu ile işaretlenmiş bir sınıf yeterli. Bu amaçla `rest` paketine aşağıdaki sınıfı ekleyelim.
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import jakarta.ws.rs.ApplicationPath;
+import jakarta.ws.rs.core.Application;
+import java.util.Map;
+import java.util.Set;
+
+@ApplicationPath("api")
+public class SalesRestApplication extends Application {
+
+    @Override
+    public Set<Class<?>> getClasses() {
+        return Set.of(OrderResource.class, FailureMapper.class, ConstraintViolationMapper.class,
+                JsonbConfiguration.class);
+    }
+
+    // Jersey would describe the API as WADL (an XML format nobody consumes any
+    // more) at /api/application.wadl; MicroProfile OpenAPI is the modern answer.
+    @Override
+    public Map<String, Object> getProperties() {
+        return Map.of("jersey.config.server.wadl.disableWadl", true);
+    }
+}
+```
+
+**getClasses** metodunu ezmesek `JAX-RS` çalışma zamanı arşivdeki tüm `@Path` ve `@Provider` ile işaretlenmiş sınıfları kendisi bulurdu. Sınıfları açıkça listelemeyi iki nedenle tercih ediyoruz. Birincisi uygulamanın neyi yayınladığı tek bakışta görülebiliyor. İkincisi sonradan ekleyeceğimiz birim testler bu listeyi kullanarak sunucudakiyle birebir aynı uygulamayı ayağa kaldırabilecek. Böylece API'nin adresi `http://localhost:8080/sales/api/orders` olacak *(`/sales` context root'tan, `/api` bu anotasyondan, `/orders` ise kaynağın kendisinden geliyor)*
+
+### Kaynak: OrderResource
+
+`OrderResource` sınıfının içeriğini tamamen aşağıdaki kodla değiştirelim.
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import com.lectures.business.design.sales.api.OrderSummary;
+import com.lectures.business.design.sales.api.OrderingFacade;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
+import java.net.URI;
+import java.util.Objects;
+
+@Path("orders")
+@Produces(MediaType.APPLICATION_JSON)
+@ApplicationScoped
+public class OrderResource {
+
+    private final OrderingFacade orders;
+
+    protected OrderResource() {
+        this.orders = null;
+    }
+
+    @Inject
+    public OrderResource(OrderingFacade orders) {
+        this.orders = Objects.requireNonNull(orders, "orders must not be null");
+    }
+
+    @POST
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response place(@NotNull @Valid PlaceOrderRequest request, @Context UriInfo uri) {
+        OrderSummary placed = orders.placeOrder(request.toCommand());
+        URI location = uri.getAbsolutePathBuilder().path(String.valueOf(placed.orderId())).build();
+        return Response.created(location).entity(placed).build();
+    }
+
+    @GET
+    @Path("{id: \\d+}")
+    public OrderSummary get(@PathParam("id") int id) {
+        return orders.getOrder(id);
+    }
+
+    @POST
+    @Path("{id: \\d+}/confirm")
+    public OrderSummary confirm(@PathParam("id") int id) {
+        return orders.confirm(id);
+    }
+
+    @POST
+    @Path("{id: \\d+}/ship")
+    public OrderSummary ship(@PathParam("id") int id) {
+        return orders.ship(id);
+    }
+
+    @POST
+    @Path("{id: \\d+}/cancel")
+    public OrderSummary cancel(@PathParam("id") int id) {
+        return orders.cancel(id);
+    }
+}
+```
+
+Yaptığımız önemli değişiklikler var. Bunları kısaca değerlendirelim.
+
+- **Routing:** Üç regex ifadesi *(COLLECTION, ITEM, ACTION)* ve `if-else` zinciri yerine her metodun üzerinde bir `@Path` ve bir **HTTP** metodu anotasyonu var. `{id: \\d+}` ifadesi, adresin yol parametresinin sadece rakamlardan oluşabileceğini söylüyor. Buna göre `/orders/abc` gibi bir adres hiçbir metotla eşleşmiyor ve HTTP 404 dönüyor. Yani regex ifadelerini halen kullanıyoruz ama artık yönlendirmeyi çalışma zamanı yapıyor.
+- **HTTP metodu kontrolü:** **requireMethod** metoduna ve **MethodNotAllowed** sınıfına artık gerek yok. `/orders/10248/ship` adresine **GET** ile gelen bir istek için **Jersey**, adresin var olduğunu ama GET'i desteklemediğini kendisi anlıyor ve `Allow: POST, OPTIONS` başlığıyla bir HTTP 405 yanıtı hazırlıyor.
+- **Doğrulama:** `@Valid` anotasyonu, Jersey'e talep ile gelen gövdeyi *(body)* metodu çağırmadan önce Bean Validation ile doğrulamasını söylüyor. `@NotNull` ise gövdenin tamamen boş *(`null`)* olarak gelmesini engelliyor. Normalde bunu **RequestValidator.validate** metodunun ilk satırında kendi yazdığımız kodlarla kontrol ediyorduk.
+- **JSON dönüşümü:** Ne gövdeyi okumak ne de yanıtı yazmak için bir kod parçası var. `@Consumes` ve `@Produces` anotasyonları medya tipini belirtiyor ve dönüşüm işini `JSON-B` yapıyor.
+- **Location başlığı:** **UriInfo** nesnesi isteğin tam adresini bilir. **getAbsolutePathBuilder** metodu ile `http://localhost:8080/sales/api/orders/10248` gibi mutlak bir adres üretiliyor.
+- **CDI:** Kaynak da bir CDI bean'i ve **OrderingFacade** arayüzünü constructor üzerinden alıyor. **OrderService** gibi `@ApplicationScoped` tanımlandığından proxy'nin ihtiyaç duyduğu parametresiz constructor'ı da ekledik. Kaynak herhangi bir state bilgisi tutmadığı için tek bir örneğin tüm isteklere hizmet etmesinde sakınca yok.
+
+### JSON-B Yapılandırması
+
+Önceden **JsonCodec** sınıfında Jackson için dört ayar yapmıştık. `JSON-B`'de bunların üçü varsayılan davranış. Tarihler zaten `ISO-8601` biçiminde yazılıyor, **BigDecimal** değerleri bilimsel gösterime çevrilmiyor ve `java.time` tipleri ek bir modül gerektirmiyor. Sadece bilinmeyen alanlar için katı davranmasını söylememiz yeterli olacak. Bunu sağlamak için `rest` paketine aşağıda kodları görülen JsonBConfiguration sınıfı ekleyelim.
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import jakarta.json.bind.Jsonb;
+import jakarta.json.bind.JsonbBuilder;
+import jakarta.json.bind.JsonbConfig;
+import jakarta.ws.rs.ext.ContextResolver;
+import jakarta.ws.rs.ext.Provider;
+
+@Provider
+public final class JsonbConfiguration implements ContextResolver<Jsonb> {
+
+    private static final String FAIL_ON_UNKNOWN_PROPERTIES = "jsonb.fail-on-unknown-properties";
+
+    private final Jsonb jsonb = JsonbBuilder.create(new JsonbConfig()
+            .setProperty(FAIL_ON_UNKNOWN_PROPERTIES, true));
+
+    @Override
+    public Jsonb getContext(Class<?> type) {
+        return jsonb;
+    }
+}
+```
+
+**ContextResolver**, `JAX-RS` bir bileşene ihtiyaç duyduğunda *"bunun özel bir yapılandırması var mı?"* diye sorduğu bir uzantı noktası. Jersey JSON dönüşümü yapacağı zaman bu sınıftan bir **Jsonb** nesnesi istiyor.
+
+**ProblemDetail** record'unda da küçük bir değişiklik yapacağız. Jackson'ın `@JsonInclude` anotasyonu yerine `JSON-B`'nin `@JsonbPropertyOrder` anotasyonunu kullanacağız.
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import jakarta.json.bind.annotation.JsonbPropertyOrder;
+import java.util.List;
+
+@JsonbPropertyOrder({"type", "title", "status", "detail", "instance", "code", "errors"})
+public record ProblemDetail(
+        String type,
+        String title,
+        int status,
+        String detail,
+        String instance,
+        String code,
+        List<FieldError> errors) {
+
+    public static final String MEDIA_TYPE = "application/problem+json";
+    static final String TYPE_BASE = "https://northwind.example/problems/";
+
+    public record FieldError(String field, String message) {
+
+    }
+
+    static ProblemDetail of(int status, String slug, String title, String detail, String instance) {
+        return new ProblemDetail(TYPE_BASE + slug, title, status, detail, instance, slug, null);
+    }
+
+    ProblemDetail withErrors(List<FieldError> fieldErrors) {
+        return new ProblemDetail(type, title, status, detail, instance, code, List.copyOf(fieldErrors));
+    }
+}
+```
+
+`JSON-B` iki konuda Jackson'dan farklı davranıyor. Birincisi alanları varsayılan olarak alfabetik sırayla yazıyor. Problem gövdesinde `RFC 9457`'deki sırayı korumak için `@JsonbPropertyOrder` kullanıyoruz. **OrderSummary** ise `api` paketinde duruyor ve bu paketin hiçbir framework'ü tanımaMAsı gerekiyor. Bu yüzden onun alanları alfabetik sırayla yazılacak. JSON nesnelerinde alan sırasının bir anlamı olmadığı için bu bir sorun değil. Diğer konu ise şu; `JSON-B` **null** değerli alanları varsayılan olarak hiç yazmıyor ama boş listeleri yazıyor. Bu nedenle doğrulama hatası olmayan problemlerde **errors** alanına boş liste yerine **null** veriyoruz.
+
+### Expression Language Kullanımı
+
+**PlaceOrderRequest** record'undaki `@DecimalMin` ve `@DecimalMax` anotasyonlarına kendi hata mesajlarımızı yazmıştık. Bu anotasyonların varsayılan mesajları **Expression Language *(EL)*** gerektiriyordu ve yalın **Java** uygulamamızda bir **EL** implementasyonu yoktu. Payara'da ise **Expressly** hazır olarak geliyor. Bu yüzden özel mesajları artık kaldırabiliriz.
+
+```java
+@DecimalMin("0")
+@DecimalMax("1")
+@Digits(integer = 1, fraction = 2)
+BigDecimal discount) {
+```
+
+İndirim değeri olarak `1.5` gönderildiğinde artık *"must be less than or equal to 1"* mesajını göreceğiz.
+
+### Hataları Eşlemek: ExceptionMapper
+
+**OrderResource.handle** metodundaki tek bir **catch** bloğu, her hatayı **ProblemMapper** üzerinden bir problem gövdesine çeviriyordu. `JAX-RS`'te bu işi `ExceptionMapper<T>` arayüzünü uygulayan ve `@Provider` ile işaretlenen sınıflar yapar. Çalışma zamanı bir exception yakaladığında, ilgili exception tipine en yakın olan eşleyiciyi bulur ve yanıtı ona ürettirir.
+
+Burada dikkat edilmesi gereken bir nokta var. Tüm hataları yakalamak için `ExceptionMapper<Throwable>` yazmak yeterli gibi görünebilir. Ancak **Jersey**'in **Bean Validation** desteği, doğrulama hataları için kendi `ExceptionMapper<ValidationException>` sınıfıyla gelmekte. **ConstraintViolationException** için **ValidationException** tipi **Throwable** tipinden daha yakın olduğu için **Jersey** kendi eşleyicisini seçer ve bizim problem formatımız devre dışı kalır. Bu yüzden iki mapper sınıfı yazacağız. Ortak işi ise küçük bir yardımcı sınıfta toplayacağız.
+
+ProblemResponse sınıfı;
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
+
+final class ProblemResponses {
+
+    private final ProblemMapper problems = new ProblemMapper();
+
+    Response toResponse(Throwable failure, UriInfo request) {
+        ProblemDetail problem = problems.toProblem(failure, request.getRequestUri().getPath());
+        Response.ResponseBuilder builder = failure instanceof WebApplicationException rejected
+                ? Response.fromResponse(rejected.getResponse())
+                : Response.status(problem.status());
+        return builder.status(problem.status())
+                .type(ProblemDetail.MEDIA_TYPE)
+                .entity(problem)
+                .build();
+    }
+}
+```
+
+FailureMapper sınıfı;
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
+import jakarta.ws.rs.ext.ExceptionMapper;
+import jakarta.ws.rs.ext.Provider;
+
+@Provider
+public final class FailureMapper implements ExceptionMapper<Throwable> {
+
+    private final ProblemResponses responses = new ProblemResponses();
+
+    @Context
+    private UriInfo request;
+
+    @Override
+    public Response toResponse(Throwable failure) {
+        return responses.toResponse(failure, request);
+    }
+}
+```
+
+ve ConstraintViolationMapper sınıfı;
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import jakarta.validation.ConstraintViolationException;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
+import jakarta.ws.rs.ext.ExceptionMapper;
+import jakarta.ws.rs.ext.Provider;
+
+@Provider
+public final class ConstraintViolationMapper implements ExceptionMapper<ConstraintViolationException> {
+
+    private final ProblemResponses responses = new ProblemResponses();
+
+    @Context
+    private UriInfo request;
+
+    @Override
+    public Response toResponse(ConstraintViolationException failure) {
+        return responses.toResponse(failure, request);
+    }
+}
+```
+
+- **@Context UriInfo:** Mapper sınıfları uygulama boyunca tek örnek olarak yaşar ama **UriInfo** her istekte farklıdır. `JAX-RS` bu alana o anki isteğe yönlendiren bir proxy enjekte eder. Problem gövdesindeki **instance** alanı isteğin path bilgisinden üretilir *(`/sales/api/orders/10248/ship`)*.
+- **WebApplicationException:** `JAX-RS` çalışma zamanı tarafından üretilen hatalar *(eşleşen adres yok, metot desteklenmiyor, medya tipi desteklenmiyor gibi)* bu tipten türeyen exception'lar olarak gelir ve hazırlanmış bir **Response** nesnesi taşır. `Response.fromResponse` çağrısı ile bu yanıtın başlıklarını *(örneğin 405'teki **Allow**)* koruyup sadece gövdesini değiştiriyoruz.
+
+ProblemMapper sınıfında da yapmamız gereken bazı değişiklikler var. Sadece üç tane. Sınıfın son hali aşağıdaki gibi.
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import com.lectures.business.design.shared.kernel.DomainException;
+import jakarta.json.bind.JsonbException;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.ElementKind;
+import jakarta.validation.Path;
+import jakarta.ws.rs.ProcessingException;
+import jakarta.ws.rs.WebApplicationException;
+import java.util.Comparator;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
+
+final class ProblemMapper {
+
+    private static final System.Logger LOG = System.getLogger(ProblemMapper.class.getName());
+
+    private static final Set<ElementKind> NOT_PART_OF_THE_BODY = EnumSet.of(
+            ElementKind.METHOD, ElementKind.CONSTRUCTOR, ElementKind.PARAMETER,
+            ElementKind.CROSS_PARAMETER, ElementKind.RETURN_VALUE);
+
+    ProblemDetail toProblem(Throwable failure, String instance) {
+        return switch (failure) {
+            case ConstraintViolationException invalid ->
+                validation(invalid, instance);
+            case WebApplicationException rejectedByJaxRs ->
+                http(rejectedByJaxRs.getResponse().getStatus(), rejectedByJaxRs, instance);
+            case JsonbException malformed ->
+                malformed(instance);
+            case ProcessingException wrapped when wrapped.getCause() instanceof JsonbException ->
+                malformed(instance);
+            case DomainException refused ->
+                domain(refused, instance);
+            case IllegalArgumentException invalid ->
+                ProblemDetail.of(400, "invalid-argument",
+                "Invalid argument", invalid.getMessage(), instance);
+            default ->
+                unexpected(failure, instance);
+        };
+    }
+
+    private static ProblemDetail validation(ConstraintViolationException invalid, String instance) {
+        List<ProblemDetail.FieldError> errors = invalid.getConstraintViolations().stream()
+                .map(v -> new ProblemDetail.FieldError(field(v.getPropertyPath()), v.getMessage()))
+                .sorted(Comparator.comparing(ProblemDetail.FieldError::field))
+                .toList();
+        return ProblemDetail.of(400, "validation-failed", "Request validation failed",
+                errors.size() + " field(s) are invalid", instance).withErrors(errors);
+    }
+
+    private static String field(Path path) {
+        StringBuilder field = new StringBuilder();
+        for (Path.Node node : path) {
+            if (NOT_PART_OF_THE_BODY.contains(node.getKind())) {
+                continue;
+            }
+            if (node.isInIterable()) {
+                field.append('[').append(node.getIndex() != null ? node.getIndex() : node.getKey()).append(']');
+            }
+            if (node.getKind() == ElementKind.PROPERTY) {
+                field.append(field.isEmpty() ? "" : ".").append(node.getName());
+            }
+        }
+        return field.isEmpty() ? "body" : field.toString();
+    }
+
+    private static ProblemDetail http(int status, WebApplicationException failure, String instance) {
+        return switch (status) {
+            case 400 ->
+                malformed(instance);
+            case 404 ->
+                ProblemDetail.of(404, "no-such-route", "Resource not found",
+                "no resource at " + instance, instance);
+            case 405 ->
+                ProblemDetail.of(405, "method-not-allowed", "Method not allowed",
+                "this resource does not support the request method", instance);
+            case 415 ->
+                ProblemDetail.of(415, "unsupported-media-type", "Unsupported media type",
+                "send the body as application/json", instance);
+            default ->
+                ProblemDetail.of(status, "http-" + status, "HTTP " + status, failure.getMessage(), instance);
+        };
+    }
+
+    private static ProblemDetail malformed(String instance) {
+        return ProblemDetail.of(400, "malformed-request",
+                "Malformed request body", "the body is not valid JSON for this resource", instance);
+    }
+
+    private static ProblemDetail domain(DomainException refused, String instance) {
+        return switch (refused.kind()) {
+            case NOT_FOUND ->
+                problem(404, "Resource not found", refused, instance);
+            case CONFLICT ->
+                problem(409, "Conflict with the current state", refused, instance);
+            case RULE_VIOLATION ->
+                problem(422, "Business rule violated", refused, instance);
+        };
+    }
+
+    private static ProblemDetail problem(int status, String title, DomainException refused, String instance) {
+        return ProblemDetail.of(status, refused.code(), title, refused.getMessage(), instance);
+    }
+
+    private static ProblemDetail unexpected(Throwable failure, String instance) {
+        LOG.log(System.Logger.Level.ERROR, "unhandled failure on " + instance, failure);
+        return ProblemDetail.of(500, "internal-error", "Internal server error",
+                "an unexpected error occurred", instance);
+    }
+}
+```
+
+Neler değiştiğini özetleyelim.
+
+- **MethodNotAllowed** ve Jackson'ın **JacksonException** dalları kaldırıldı. Yerlerine `JAX-RS`'in **WebApplicationException** tipi ve `JSON-B`'nin **JsonbException** tipi geldi. **Jersey**, `JSON-B`'nin fırlattığı hatayı bazen bir **ProcessingException** içine sarar. Bunun için **when** koşul içeren bir dal *(guarded pattern)* kullandık.
+- **http** metodu, runtime'ın ürettiği durum kodlarını kendi hata kodlarımıza *(`no-such-route`, `method-not-allowed`, `unsupported-media-type`)* çeviriyor. İstemciler için hiçbir şey değişmiyor. Daha önceden yazdığımız hata kodları aynen korunuyor.
+- **field** metodu, doğrulama hatalarındaki alan adını temizliyor. Jersey `@Valid` parametresini doğrularken Bean Validation'ın **metot doğrulama** *(executable validation)* özelliğini kullanıyor. Bu yüzden hatanın yolu `place.arg0.lines[0].quantity` şeklinde metot ve parametre adlarıyla başlar. İstemcinin Java metot adlarıyla bir işi yok. Bu düğümleri *(node)* atlayıp sadece gövdeye ait kısmı *(`lines[0].quantity`)* bırakmak oldukça mantıklı. Gövdenin tamamı **null** ise geriye hiçbir düğüm kalmıyor ve alan adı olarak da **body** yazılır.
+
+Son olarak `rest` paketinin **package-info.java** dosyasındaki açıklamayı da güncelleyelim.
+
+```java
+/**
+ * The HTTP edge of the sales module, on Jakarta REST (JAX-RS).
+ *
+ * <p>
+ * Sees {@code api} and {@code shared.kernel} only - never domain, application
+ * or persistence (ADR-0009). The only package allowed to use JAX-RS, JSON-B
+ * and Bean Validation; nobody depends on it.
+ */
+package com.lectures.business.design.sales.rest;
+```
+
+### Payara Üzerinde Deneyelim
+
+`app` modülünde hiçbir değişiklik yapmadık. `sales` modülünün JAR'ı WAR'ın içinde duruyor ve Payara açılırken **SalesRestApplication** sınıfını otomatikman buluyor. Uygulamayı derleyip başlattıktan sonra daha önceden yaptığımız denemeleri tekrarlayabiliriz.
+
+```powershell
+cd src\week14-application-server
+mvn clean install
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+Ayrıca şunları da deneyebiliriz.
+
+- Var olmayan bir sipariş *(`GET .../orders/99999`, 404 `order-not-found`)*,
+- var olmayan bir adres *(`GET .../orders/10248/refund`, 404 `no-such-route`)*,
+- rakam olmayan bir kimlik *(`GET .../orders/abc`, 404 `no-such-route`)*,
+- yanlış yazılmış bir alan *(`customerID`, 400 `malformed-request`)*,
+- ve JSON olmayan bir body *(`Content-Type: text/plain`, 415 `unsupported-media-type`)*.
+
+### Testler: JerseyTest
+
+Önceki bölümde yazdığımız **SalesHttpServerTest** sınıfı, sunucuyu gerçek bir soket üzerinde başlatıp **JDK**'nın **HttpClient** sınıfı ile istek gönderiyordu. Aynı beklentileri Payara sunucusunu başlatmadan test edebilmek için **Jersey Test Framework** aracını kullanacağız. Bu araç, Payara'nın `JAX-RS` için kullandığı Jersey ortamını daha küçük bir HTTP sunucusu üzerinde ayağa kaldırıyor. Sunucu olarak da *(ne tesadüf ki)* JDK'nın `com.sun.net.httpserver` paketini kullanan bir provider seçeceğiz. Öncelikle ana `pom.xml` dosyasının `properties` kısmına aşağıdaki sürümleri ekleyelim.
+
+```xml
+<jersey.version>4.0.2</jersey.version>
+<expressly.version>6.0.0</expressly.version>
+<yasson.version>3.0.4</yasson.version>
+<hibernate-validator.version>9.0.1.Final</hibernate-validator.version>
+```
+
+**dependencyManagement** kısmına da Jersey'in BOM *(Bill of Materials)* dosyasını ve diğer iki kütüphaneyi ekleyelim. BOM, Jersey'in onlarca modülünün birbiriyle uyumlu sürümlerini tek bir yerden yönetmemizi sağlıyor.
+
+```xml
+<dependency>
+    <groupId>org.glassfish.jersey</groupId>
+    <artifactId>jersey-bom</artifactId>
+    <version>${jersey.version}</version>
+    <type>pom</type>
+    <scope>import</scope>
+</dependency>
+<dependency>
+    <groupId>org.eclipse</groupId>
+    <artifactId>yasson</artifactId>
+    <version>${yasson.version}</version>
+</dependency>
+<!-- jersey-bean-validation brings 8.0.x; Payara 7 runs 9.0.1 -->
+<dependency>
+    <groupId>org.hibernate.validator</groupId>
+    <artifactId>hibernate-validator</artifactId>
+    <version>${hibernate-validator.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.expressly</groupId>
+    <artifactId>expressly</artifactId>
+    <version>${expressly.version}</version>
+</dependency>
+```
+
+Sürümleri bilerek `Payara Micro 7.2026.8` içindekilerle aynı seçtik. Testlerin sunucudakinden farklı bir **Jersey** veya **Yasson** sürümüyle çalışması, sadece testte görülen ya da sadece sunucuda görülen hatalara yol açabilir. `sales` modülünün `pom.xml` dosyasına ise aşağıdaki test bağımlılıklarını eklememiz gerekiyor.
+
+```xml
+<dependency>
+    <groupId>org.glassfish.jersey.test-framework.providers</groupId>
+    <artifactId>jersey-test-framework-provider-jdk-http</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.jersey.inject</groupId>
+    <artifactId>jersey-hk2</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.jersey.media</groupId>
+    <artifactId>jersey-media-json-binding</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.jersey.ext</groupId>
+    <artifactId>jersey-bean-validation</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.eclipse</groupId>
+    <artifactId>yasson</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.expressly</groupId>
+    <artifactId>expressly</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+| **Dependency** | **Payara'daki karşılığı** |
+| --- | --- |
+| `jersey-test-framework-provider-jdk-http` | Payara'nın HTTP katmanı *(Grizzly)* |
+| `jersey-hk2` | Jersey'in kendi bağımlılık enjeksiyonu *(HK2)*. Payara'da **CDI** ile birlikte çalışır. |
+| `jersey-media-json-binding` ve **yasson** | `JSON-B` desteği |
+| `jersey-bean-validation` | `@Valid` desteği ve Hibernate Validator |
+| `expressly` | Expression Language |
+
+Şimdi `sales` modülünün test kodlarındaki `rest` paketine **OrderResourceTest** sınıfını ekleyelim. Test metotlarının neredeyse tamamı **SalesHttpServerTest** sınıfından gelecektir. Değişen kısımları aşağıda ayrıca açıklayacağız.
+
+```java
+package com.lectures.business.design.sales.rest;
+
+import com.lectures.business.design.sales.api.OrderingFacade;
+import com.lectures.business.design.sales.application.OrderMapper;
+import com.lectures.business.design.sales.application.OrderService;
+import com.lectures.business.design.sales.application.SteppingClock;
+import com.lectures.business.design.sales.domain.Customer;
+import com.lectures.business.design.sales.domain.CustomerId;
+import com.lectures.business.design.sales.domain.OrderFactory;
+import com.lectures.business.design.sales.domain.SequentialOrderIdGenerator;
+import com.lectures.business.design.sales.persistence.CustomerRepository;
+import com.lectures.business.design.sales.persistence.InMemoryCustomerRepository;
+import com.lectures.business.design.sales.persistence.InMemoryOrderRepository;
+import com.lectures.business.design.shared.kernel.Address;
+import jakarta.ws.rs.core.Application;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import org.glassfish.jersey.inject.hk2.AbstractBinder;
+import org.glassfish.jersey.server.ResourceConfig;
+import org.glassfish.jersey.test.JerseyTest;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class OrderResourceTest {
+
+    private static final String VALID_ORDER = """
+            {"customerId": "VINET",
+             "lines": [{"productId": 11, "unitPrice": 14.00, "quantity": 10},
+                       {"productId": 42, "unitPrice": 9.80, "quantity": 5, "discount": 0.10}]}
+            """;
+
+    private final HttpClient client = HttpClient.newHttpClient();
+    private JerseyTest jersey;
+
+    @BeforeEach
+    void startJersey() throws Exception {
+        SteppingClock clock = new SteppingClock("1996-07-04T09:00:00Z");
+        CustomerRepository customers = new InMemoryCustomerRepository();
+        customers.save(new Customer(CustomerId.of("VINET"), "Vins et alcools Chevalier",
+                new Address("59 rue de l'Abbaye", "Reims", "51100", "France")));
+        OrderService service = new OrderService(new InMemoryOrderRepository(), customers,
+                new OrderFactory(new SequentialOrderIdGenerator(10248), clock),
+                new OrderMapper(), clock, event -> {
+                });
+
+        jersey = new JerseyTest() {
+            @Override
+            protected Application configure() {
+                SalesRestApplication application = new SalesRestApplication();
+                return new ResourceConfig(application.getClasses())
+                        .addProperties(application.getProperties())
+                        .register(new AbstractBinder() {
+                            @Override
+                            protected void configure() {
+                                bind(service).to(OrderingFacade.class);
+                            }
+                        });
+            }
+        };
+        jersey.setUp();
+    }
+
+    @AfterEach
+    void stopJersey() throws Exception {
+        jersey.tearDown();
+    }
+
+    private HttpResponse<String> post(String path, String body) throws IOException, InterruptedException {
+        return client.send(HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> get(String path) throws IOException, InterruptedException {
+        return client.send(HttpRequest.newBuilder(uri(path)).GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private URI uri(String path) {
+        return jersey.target().getUri().resolve(path);
+    }
+
+    @Test
+    @DisplayName("POST /orders answers 201, a Location header and the summary")
+    void placeOrderReturnsCreated() throws Exception {
+        HttpResponse<String> response = post("/orders", VALID_ORDER);
+
+        assertThat(response.statusCode()).isEqualTo(201);
+        assertThat(response.headers().firstValue("Location"))
+                .hasValueSatisfying(location -> assertThat(location).endsWith("/orders/10248"));
+        assertThat(response.headers().firstValue("Content-Type")).contains("application/json");
+        assertThat(response.body())
+                .contains("\"orderId\":10248", "\"status\":\"DRAFT\"",
+                        "\"orderDate\":\"1996-07-04\"", "\"total\":184.10");
+    }
+
+    @Test
+    @DisplayName("the whole lifecycle over HTTP: place, confirm, ship, read")
+    void lifecycleOverHttp() throws Exception {
+        post("/orders", VALID_ORDER);
+
+        assertThat(post("/orders/10248/confirm", "").body()).contains("\"status\":\"CONFIRMED\"");
+        assertThat(post("/orders/10248/ship", "").body()).contains("\"status\":\"SHIPPED\"");
+        assertThat(get("/orders/10248").body()).contains("\"status\":\"SHIPPED\"");
+    }
+
+    @Test
+    @DisplayName("every invalid field is reported at once, as a 400 problem")
+    void validationFailuresAreCollected() throws Exception {
+        HttpResponse<String> response = post("/orders", """
+                {"customerId": " ",
+                 "lines": [{"productId": 0, "unitPrice": 14.001, "quantity": 0, "discount": 1.5}]}
+                """);
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(response.headers().firstValue("Content-Type")).contains(ProblemDetail.MEDIA_TYPE);
+        assertThat(response.body())
+                .contains("\"code\":\"validation-failed\"", "\"detail\":\"5 field(s) are invalid\"")
+                .contains("\"field\":\"customerId\"", "\"field\":\"lines[0].productId\"",
+                        "\"field\":\"lines[0].quantity\"", "\"field\":\"lines[0].unitPrice\"",
+                        "\"field\":\"lines[0].discount\"", "must be less than or equal to 1")
+                .doesNotContain("${", "place.", "arg0");
+    }
+
+    @Test
+    @DisplayName("a missing body is a validation failure of the body itself")
+    void nullBody() throws Exception {
+        HttpResponse<String> response = post("/orders", "null");
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(response.body()).contains("\"field\":\"body\"");
+    }
+
+    @Test
+    @DisplayName("shape is checked at the edge, invariants in the domain: a bad id format is still a 400")
+    void domainValueObjectRejectionIsA400() throws Exception {
+        HttpResponse<String> response = post("/orders", """
+                {"customerId": "VIN3T", "lines": [{"productId": 11, "unitPrice": 14.00, "quantity": 1}]}
+                """);
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(response.body()).contains("\"code\":\"invalid-argument\"", "five letters");
+    }
+
+    @Test
+    @DisplayName("broken JSON and unknown fields are a 400, not a 500")
+    void malformedBodies() throws Exception {
+        assertThat(post("/orders", "{\"customerId\": ").statusCode()).isEqualTo(400);
+
+        HttpResponse<String> typo = post("/orders", """
+                {"customerID": "VINET", "lines": []}
+                """);
+        assertThat(typo.statusCode()).isEqualTo(400);
+        assertThat(typo.body()).contains("\"code\":\"malformed-request\"");
+    }
+
+    @Test
+    @DisplayName("domain refusals map by kind: NOT_FOUND is 404, CONFLICT is 409")
+    void domainRefusalsMapByKind() throws Exception {
+        HttpResponse<String> unknownCustomer = post("/orders", """
+                {"customerId": "ALFKI", "lines": [{"productId": 11, "unitPrice": 14.00, "quantity": 1}]}
+                """);
+        assertThat(unknownCustomer.statusCode()).isEqualTo(404);
+        assertThat(unknownCustomer.body()).contains("\"code\":\"customer-not-found\"",
+                "\"type\":\"https://northwind.example/problems/customer-not-found\"");
+
+        assertThat(get("/orders/99999").statusCode()).isEqualTo(404);
+
+        post("/orders", VALID_ORDER);
+        HttpResponse<String> shipDraft = post("/orders/10248/ship", "");
+        assertThat(shipDraft.statusCode()).isEqualTo(409);
+        assertThat(shipDraft.body()).contains("\"code\":\"invalid-state-transition\"",
+                "\"instance\":\"/orders/10248/ship\"");
+    }
+
+    @Test
+    @DisplayName("a known route with the wrong verb is a 405 with an Allow header")
+    void wrongVerb() throws Exception {
+        HttpResponse<String> response = get("/orders/10248/ship");
+
+        assertThat(response.statusCode()).isEqualTo(405);
+        assertThat(response.headers().firstValue("Allow"))
+                .hasValueSatisfying(allow -> assertThat(allow).contains("POST"));
+        assertThat(response.body()).contains("\"code\":\"method-not-allowed\"");
+    }
+
+    @Test
+    @DisplayName("a body that is not JSON is a 415")
+    void wrongMediaType() throws Exception {
+        HttpResponse<String> response = client.send(HttpRequest.newBuilder(uri("/orders"))
+                .header("Content-Type", "text/plain")
+                .POST(HttpRequest.BodyPublishers.ofString("hello"))
+                .build(), HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(415);
+        assertThat(response.body()).contains("\"code\":\"unsupported-media-type\"");
+    }
+
+    @Test
+    @DisplayName("an unknown route is a 404 problem, too")
+    void unknownRoute() throws Exception {
+        HttpResponse<String> response = get("/orders/10248/refund");
+
+        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(response.body()).contains("\"code\":\"no-such-route\"");
+    }
+}
+```
+
+**JerseyTest** sınıfı JUnit 4 döneminde yazılmış bir base class. JUnit Jupiter ile kullanırken ondan türeyen anonim bir sınıf oluşturup **setUp** ve **tearDown** metotlarını kendimiz çağırıyoruz. **configure** metodu, **SalesRestApplication** sınıfının listelediği sınıflarla bir **ResourceConfig** oluşturuyor. Yani test, sunucunun çalıştırdığı uygulamanın birebir aynısını ayağa kaldırıyor. Diğer yandan testte CDI yok. **OrderResource** sınıfının constructor'ı bir **OrderingFacade** bekliyor. Jersey'in kendi enjeksiyon mekanizması olan HK2'ye **AbstractBinder** ile *"bu arayüz istendiğinde bu nesneyi ver"* diyoruz. HK2 de `@Inject` anotasyonunu tanıdığı için **OrderResource** sınıfında hiçbir değişiklik gerekmiyor.
+
+Test sunucusu varsayılan olarak `http://localhost:9998/` adresinden çalışıyor ve `@ApplicationPath` değerini kullanmıyor. Bu yüzden istekleri `/sales/api/orders` yerine doğrudan `/orders` adresine gönderiyoruz. **instance** alanı da `/orders/10248/ship` olarak geliyor.
+
+> Bu testin bir sınırı var. Testte CDI olmadığı için **OrderResource** bir CDI bean'i olarak değil, Jersey'in kendi nesnesi olarak oluşturuluyor. `@Transactional` gibi interceptor'lar da devreye girmiyor. CDI ve JTA ile birlikte gerçek sunucu davranışını test etmek için uygulamanın Payara üzerinde çalıştırılması gerekir. Bunun bir yolu, Testcontainers ile `payara/micro` imajını ve PostgreSQL'i birlikte ayağa kaldıran bir entegrasyon testi yazmaktır *(Bunun nasıl yapılabileceğini araştıralım ve deneyelim)*
+
+Testleri terminalden ya da Apache Netbeans'ten çalıştıralım. İlk çalıştırmada Maven, Jersey test bağımlılıklarını indireceği için bu biraz zaman alabilir.
+
+```powershell
+mvn clean install
+```
+
+![Order resources tests](./images/week_14_15.png)
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
