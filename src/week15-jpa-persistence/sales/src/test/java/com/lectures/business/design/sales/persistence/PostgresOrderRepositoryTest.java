@@ -36,7 +36,8 @@ class PostgresOrderRepositoryTest extends OrderRepositoryContract {
 
         cleanAndMigrate(dataSource);
         TestDatabases.withDemoCustomers(dataSource);
-        return new JdbcOrderRepository(dataSource);
+        JpaUnit unit = JpaUnit.on(dataSource);
+        return unit.transactional(OrderRepository.class, new JpaOrderRepository(unit.entityManager()));
     }
 
     private static void cleanAndMigrate(DataSource dataSource) {

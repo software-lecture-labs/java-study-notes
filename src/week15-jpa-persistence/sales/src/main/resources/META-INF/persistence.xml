@@ -8,6 +8,8 @@
         <jta-data-source>java:app/jdbc/sales</jta-data-source>
         <class>com.lectures.business.design.sales.persistence.CustomerEntity</class>
         <class>com.lectures.business.design.sales.persistence.AddressColumns</class>
+        <class>com.lectures.business.design.sales.persistence.OrderEntity</class>
+        <class>com.lectures.business.design.sales.persistence.OrderLineColumns</class>
         <exclude-unlisted-classes>true</exclude-unlisted-classes>
         <shared-cache-mode>NONE</shared-cache-mode>
         <properties>

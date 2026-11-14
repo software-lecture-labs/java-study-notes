@@ -2,7 +2,7 @@ package com.lectures.business.design.sales.rest;
 
 import com.lectures.business.design.sales.domain.IncompleteOrderException;
 import com.lectures.business.design.sales.domain.OrderId;
-import com.lectures.business.design.sales.persistence.RepositoryException;
+import jakarta.persistence.PersistenceException;
 import java.sql.SQLException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,7 +26,7 @@ class ProblemMapperTest {
     @Test
     @DisplayName("an infrastructure failure is a 500 that leaks nothing")
     void unexpectedFailuresAreOpaque() {
-        RepositoryException failure = new RepositoryException("could not save order 10248",
+        PersistenceException failure = new PersistenceException("could not save order 10248",
                 new SQLException("password authentication failed for user \"johndoe\""));
 
         ProblemDetail problem = mapper.toProblem(failure, "/orders");

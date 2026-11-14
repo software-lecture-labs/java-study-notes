@@ -1,14 +1,16 @@
 package com.lectures.business.design.sales.persistence;
 
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.EntityManagerFactory;
-import jakarta.persistence.EntityTransaction;
-import jakarta.persistence.Persistence;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.Map;
 import java.util.Objects;
+
 import javax.sql.DataSource;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.EntityTransaction;
+import jakarta.persistence.Persistence;
 
 public final class JpaUnit {
 
@@ -25,6 +27,8 @@ public final class JpaUnit {
                 "jakarta.persistence.jtaDataSource", "",
                 "jakarta.persistence.nonJtaDataSource", dataSource,
                 "eclipselink.weaving", "false",
+                "eclipselink.logging.level.sql", "FINE",
+                "eclipselink.logging.parameters", "true",
                 "eclipselink.logging.level", "WARNING"));
         return new JpaUnit(factory.createEntityManager());
     }
