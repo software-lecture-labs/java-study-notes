@@ -1281,6 +1281,107 @@ Sürümü **3** olan 12 sipariş iki kez başarıyla güncellenmiş siparişler 
 
 > Çakışan isteği sunucu tarafında otomatik olarak yeniden denemek *(retry)* cazip gelebilir. Ancak **confirm** ile **cancel** arasındaki çakışmada yeniden denemenin sonucu, kullanıcının niyetiyle çelişebilir. İptal etmek isteyen kullanıcı, siparişin arada onaylandığını bilmeden iptal edebilir. Bu yüzden kararı istemciye bırakıyoruz *(Tartışmaya açabiliriz)*.
 
+## İkinci Seviye Önbellek *(L2 Cache)* Mevzusu
+
+Öncelikle iki önbellek seviyesini ayıralım.
+
+| **Seviye** | **Yaşam Süresi** | **Kimler paylaşır?** |
+| --- | --- | --- |
+| Birinci seviye *(persistence context)* | Bir transaction *(bizim için bir HTTP isteği)* | Sadece o **EntityManager** |
+| İkinci seviye *(shared cache)* | Uygulama çalıştığı sürece | Aynı JVM içindeki bütün **EntityManager** nesneleri |
+
+Birinci seviye önbellekten istek bitince kaybolur. İkinci seviye önbellek ise bir entity'yi veritabanından bir kez okuduktan sonra gelen sonraki isteklere veritabanına gitmeden verir. Veritabanındaki her değişiklik bu uygulamanın üzerinden geçiyorsa sorun yok. Ancak bir raporlama aracı, farklı bir flyway migration, başka bir uygulama ya da elle çalıştırılan bir SQL cümlesi veriyi önbelleğin haberi olmadan değiştirebilir *(Aynı uygulamanın ikinci bir örneği de bu listeye dahil, çünkü her JVM'in kendi önbelleği var)*
+
+Deneme yapmak için `persistence.xml` dosyasındaki `shared-cache-mode` değerini geçici olarak **ALL** yapalım.
+
+```xml
+<shared-cache-mode>ALL</shared-cache-mode>
+```
+
+![Shared cache mode value](./images/week_15_17.png)
+
+Uygulamayı derleyip Payara'yı başlatalım.
+
+```powershell
+# week15-jpa-persistence klasöründe derleyip çalıştıralım
+mvn clean install -DskipTests
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+### Deneme 1: Eski Bir Sipariş Durumu
+
+İkinci terminalde bir sipariş oluşturup okuyalım. Ardından siparişi uygulamayı atlayarak doğrudan veritabanından iptal edelim ve tekrar okuyalım. *(Bu sefer bir POST mesajını powershell komutları ile nasıl gönderebileceğimize de bakalım)*
+
+```powershell
+$base = "http://localhost:8080/sales/api/orders"
+$body = '{"customerId":"TOMSP","lines":[{"productId":12,"unitPrice":16.00,"quantity":5}]}'
+$id = (Invoke-RestMethod -Method Post -Uri $base -ContentType "application/json" -Body $body).orderId
+Invoke-RestMethod "$base/$id"
+
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "UPDATE orders SET status = 'CANCELLED', version = version + 1 WHERE order_id = $id"
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT status, version FROM orders WHERE order_id = $id"
+
+Invoke-RestMethod "$base/$id"
+```
+
+![Experiment 1 - API response after direct DB update](./images/week_15_18.png)
+
+Veritabanında sipariş **CANCELLED** durumunda ve sürümü **2**. API ise hala **DRAFT** döndürüyor. **JpaOrderRepository** sorguyu çalıştırmadan önce siparişi önbellekte bulmuş ve veritabanına hiç sormamış. Şimdi bu eski kopya üzerinden siparişi onaylamaya çalışalım.
+
+```powershell
+curl.exe -s -i -X POST "$base/$id/confirm"
+curl.exe -s -i -X POST "$base/$id/confirm"
+Invoke-RestMethod "$base/$id"
+```
+
+![Experiment 1 - API response after concurrent order change](./images/week_15_19.png)
+
+Bizim denememizde ilk istek `concurrent-order-change` koduyla 409 döndü. Önbellekteki kopyanın sürümü **1**, veritabanındaki sürüm ise **2**. **UPDATE** cümlesinin **WHERE** kısmındaki sürüm kontrolü hiçbir satırı eşleştiremedi. İptal edilmiş bir sipariş, bir önceki adımda eklediğimiz kilitleme sayesinde onaylanmaktan kurtuldu. **EclipseLink** çakışmadan sonra bu siparişi önbellekten de çıkardı. İkinci istek siparişi veritabanından taze haliyle okudu ve bu sefer `order-not-modifiable` koduyla 409 döndü. Son **GET** isteği de **CANCELLED** durumunda olduğumuzu göstermekte. Bir başka deyişle sürüm kolonu, önbelleğin yanıltıcı olduğu durumda da verinin bozulmasını engelliyor. Ancak okuma yine yanlıştı ve istemci bir çakışma yaşamak zorunda kaldı.
+
+### Deneme 2: Sürümü Olmayan Bir Entity
+
+**CustomerEntity** sınıfında bir sürüm alanı bulunmuyor. Müşterinin adresini doğrudan veritabanında değiştirelim ve bu müşteri için yeni bir sipariş oluşturalım.
+
+```powershell
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "UPDATE customers SET street = '12 rue de Rivoli', city = 'Paris', postal_code = '75001' WHERE customer_id = 'VINET'"
+
+$order = Invoke-RestMethod -Method Post -Uri $base -ContentType "application/json" -Body $body
+$order.shippingCity
+
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT order_id, ship_street, ship_city FROM orders ORDER BY order_id DESC LIMIT 1"
+```
+  
+![Last update wins](./images/week_15_20.png)
+
+Müşteri artık Paris'te ama yeni sipariş **Reims** adresine kaydedildi. **OrderService** müşteriyi önbellekten okudu ve onun eski adresini siparişin teslimat adresi olarak kopyaladı. Bu sefer bizi koruyacak bir sürüm kontrolü yok, çünkü müşteriyi okuyoruz ama yazmıyoruz. Eski veri hiçbir hata vermeden yeni bir siparişin içine kalıcı olarak yazıldı. İkinci seviye önbelleğin en tehlikeli hali bu. Sessizce yanlış sonuç üretmesi mümkün.
+
+### Önbelleği Kapatıp Tekrar Deneyelim
+
+Payara'yı durduralım, `persistence.xml` dosyasını geri alalım ve uygulamayı tekrar başlatalım.
+
+```powershell
+mvn clean install -DskipTests
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+**SalesStartup**, uygulama her açıldığında demo müşterileri yerine koyduğu için VINET müşterisinin adresi tekrar **Reims** oldu. İki denemeyi aynı komutlarla tekrarlayalım. Bu sefer doğrudan yapılan değişiklikler bir sonraki istekte hemen görünmelidir. İptal edilen sipariş **CANCELLED** olarak okunmalı ve adresi değişen müşterinin yeni siparişi yeni şehre kaydedilmelidir.
+
+![L2 Cache closed Illustration I](./images/week_15_21.png)
+
+![L2 Cache closed Illustration II](./images/week_15_22.png)
+
+### Peki Önbellek Hiç Kullanılmamalı mı?
+
+İkinci seviye önbellek, okuma yükünü veritabanından alan güçlü bir araç. Doğru yerde kullanıldığında faydalı. Karar vermek kolay değil o yüzden seçenekleri karşılaştıralım.
+
+| **Seçenek** | **Ne zaman uygun?** |
+| --- | --- |
+| `NONE` | Veriyi başka uygulamalar ya da araçlar da değiştiriyorsa, uygulamanın birden fazla örneği çalışıyorsa *(Bizim tercihimiz)* |
+| `ENABLE_SELECTIVE` ve `@Cacheable(true)` | Sadece nadiren değişen ve sahibi bu uygulama olan referans verileri *(ülkeler, para birimleri, ürün kategorileri)* önbelleğe almak istediğimizde |
+| `ALL` ve **EclipseLink**'in önbellek koordinasyonu | Birden fazla örnek arasında önbelleği geçersiz kılan mesajlaşma altyapısı kurabiliyorsak. Bu durumda bile veritabanını doğrudan değiştiren araçlar görünmez kalabilir. |
+
+Önbellek bir performans kararı ve performans kararları ölçümler yapılarak verilmelidir. Bizim uygulamamızda tek bir müşteri sorgusunun maliyeti, yanlış bir adrese gönderilen bir siparişin maliyetinin yanında önemsiz. Bu kararı da ADR-0011 belgesinde yazmamız gerekecek.
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
