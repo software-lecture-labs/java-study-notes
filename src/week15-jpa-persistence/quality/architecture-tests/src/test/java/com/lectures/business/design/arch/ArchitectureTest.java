@@ -19,9 +19,14 @@ import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.event.TransactionPhase;
+import jakarta.persistence.Embeddable;
+import jakarta.persistence.Entity;
 import jakarta.transaction.Transactional;
 import java.sql.Connection;
 import java.util.Optional;
+import static com.tngtech.archunit.base.DescribedPredicate.not;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.INTERFACES;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.fields;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
@@ -191,6 +196,28 @@ class ArchitectureTest {
     static final ArchRule domain_event_observers_wait_for_commit = methods()
             .that().areDeclaredInClassesThat().resideInAPackage("..sales..")
             .should(observeDomainEventsOnlyAfterSuccess());
+
+    // ADR-0011 JPA persistence
+    @ArchTest
+    static final ArchRule jpa_stays_in_persistence = noClasses()
+            .that().resideOutsideOfPackage("..sales.persistence..")
+            .should().dependOnClassesThat().resideInAPackage("jakarta.persistence..");
+
+    @ArchTest
+    static final ArchRule mapped_classes_live_in_persistence = classes()
+            .that().areAnnotatedWith(Entity.class).or().areAnnotatedWith(Embeddable.class)
+            .should().resideInAPackage("..sales.persistence..");
+
+    @ArchTest
+    static final ArchRule entities_do_not_leak = noClasses()
+            .that().resideOutsideOfPackage("..sales.persistence..")
+            .should().dependOnClassesThat().areAnnotatedWith(Entity.class)
+            .orShould().dependOnClassesThat().areAnnotatedWith(Embeddable.class);
+
+    @ArchTest
+    static final ArchRule application_sees_only_repository_contracts = noClasses()
+            .that().resideInAPackage("..sales.application..")
+            .should().dependOnClassesThat(resideInAPackage("..sales.persistence..").and(not(INTERFACES)));
 
     private static ArchCondition<JavaMethod> observeDomainEventsOnlyAfterSuccess() {
         return new ArchCondition<>("observe domain events only after a successful commit") {
