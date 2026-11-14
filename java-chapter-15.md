@@ -1551,7 +1551,83 @@ Tüm testleri yeşil bayrak kaldırması gerekiyor.
 
 ![All tests passed](./images/week_15_25.png)
 
-// DEVAM EDECEK
+## Neler Değişti?
+
+Son durumu paket bazında özetleyelim.
+
+| **Paket / Modül** | **Önceki** | **Güncel** |
+| --- | --- | --- |
+| `shared-kernel` | Value object'ler, **DomainEvent**, **DomainException** | Değişmedi |
+| `sales.domain` | Aggregate, olaylar, exception'lar, factory | **Order** sınıfına teknik bir sürüm bilgisi, yeni **ConcurrentOrderChangeException** |
+| `sales.api` | DTO'lar ve **OrderingFacade** | Değişmedi |
+| `sales.application` | **OrderService**, CDI olayları, **AFTER_SUCCESS** gözlemcileri | Değişmedi |
+| `sales.persistence` | JDBC repository'leri, elle yazılmış SQL | **JpaOrderRepository**, **JpaCustomerRepository**, ayrı entity'ler, **persistence.xml**, **@Version** |
+| `sales.rest` | JAX-RS kaynağı, **ProblemMapper** | Değişmedi. Yeni çakışma kodu **Kind.CONFLICT** sayesinde kendiliğinden 409 oldu |
+| `app` | **sales.war**, **SalesWiring**, **SalesStartup** | Demo müşteriler kendi transaction'ında yazılıyor *(**DemoCustomers**)* |
+| Şema *(Schema)* | V1 ve V2 migration'ları | `V3__add_order_version.sql` |
+
+Persistence teknolojisini tamamen değiştirdik ama **HTTP** katmanında, kullanım senaryolarında ve testlerin büyük çoğunluğunda hiçbir şey değişmedi. Sözleşme testleri *(contract tests)* bu geçişin güvencesi oldu. **JDBC** implementasyonlarının geçtiği testlerden **JPA** implementasyonları da geçti. Testlerin yakaladığı tek fark `write-behind` davranışıydı ve bu da testlerin kendisini değil, hatanın ne zaman ortaya çıktığını değiştirdi.
+
+Bölümün başında sorduğumuz dört soruya da kısaca dönelim.
+
+Uygulamayı denemek için [Insomnia koleksiyonu](./tools/insomnia-sales-api-week14.yaml) aynen geçerli. Eş zamanlı istekleri denemek içinse [race-confirm-cancel.ps1](./tools/race-confirm-cancel.ps1) betiğini kullanabiliriz *(PowerShell 7 gerektirir)*.
+
+---
+
+## Bölüm Soruları
+
+1. **CustomerEntity** sınıfında bir sürüm alanı yok, çünkü müşteri bilgilerini değiştiren bir kullanım senaryomuz yok. Müşterinin adresini güncelleyen bir **changeAddress** kullanım senaryosu eklersek hangi sınıflar değişmeli? Müşteri ile sipariş ayrı aggregate'ler olduğuna göre, bir siparişin teslimat adresi müşterinin adresi değiştiğinde güncellenmeli mi?
+2. **409 concurrent-order-change** yanıtını alan bir istemci siparişi tekrar okuyup kararını yeniden vermeli. HTTP'nin **ETag** ve **If-Match** başlıklarını kullanarak sürüm bilgisini istemciye nasıl taşırız? Bu durumda `GET /orders/{id}` yanıtına bir `ETag: "3"` başlığı ekleyip `If-Match` başlığı olmayan değiştirme isteklerini `428 Precondition Required` ile reddetmenin artıları ve eksileri neler? Sürüm bilgisi `OrderSummary` DTO'sunda mı, yoksa sadece HTTP başlığında mı durmalı?
+3. Bölüm 8'deki **Specification** desenini hatırlayalım. *"Belirli bir müşterinin onaylanmış siparişleri"* gibi bir sorguyu **JpaOrderRepository** ile nasıl yazarız? Specification nesnelerini JPA Criteria API'sine çeviren bir yapı domain'i JPA'ya bağlamadan nasıl kurulabilir? Bu çeviri hangi pakette durmalı?
+4. **findAll** metodu bütün siparişleri kalemleriyle birlikte okuyor. Sipariş sayısı yüz binlere çıktığında ne olur? Sayfalama *(pagination)* ile `JOIN FETCH` birlikte kullanıldığında JPA neden uyarı verir ya da sayfalamayı bellekte yapar? Liste ekranları için aggregate yerine doğrudan DTO döndüren bir okuma modeli *(CQRS'in okuma tarafı)* nasıl bir çözüm sunar?
+5. EclipseLink bir eşleme hatasından kaçınmak için `eclipselink.read-only` ipucunu kullanmamızı gerektirdi. Aynı uygulamayı Hibernate ile çalıştırsaydık hangi ayarlar değişirdi? `persistence.xml` dosyasında sağlayıcıya özgü kaç ayar var ve bunlar taşınabilirliği nasıl etkiliyor?
+6. **OrderEntity.from(order)** ile her kayıtta yeni bir entity oluşturuyoruz. Bunun yerine repository'nin okuduğu entity'yi aynı transaction içinde güncelleyen *(managed entity üzerinde dirty checking)* bir tasarım nasıl olurdu? Kullanım senaryosu siparişi okuyup kaydetmeyi aynı transaction'da yaptığına göre bu mümkün mü? Domain nesnesi ile entity arasında kimin kimi takip edeceği sorusu nasıl çözülür?
+7. Kayıp güncellemeyi optimistik kilitleme ile çözdük. Aynı problemi veritabanının yalıtım seviyesini *(isolation level)* `REPEATABLE READ` veya `SERIALIZABLE` yaparak çözmeye çalışsaydık PostgreSQL nasıl davranırdı? Bu durumda istemci hangi hatayı alırdı ve bu hata hangi katmanda yakalanmalıydı?
+8. İkinci seviye önbelleği sadece nadiren değişen referans verileri için açmak istiyoruz. Örneğin ürün kataloğu. `ENABLE_SELECTIVE` ve `@Cacheable` ile bunu nasıl yaparız? Uygulamanın üç örneği aynı anda çalışıyorsa önbellekler birbirinden nasıl haberdar olur? EclipseLink'in önbellek koordinasyonu *(cache coordination)* ve önbelleği tamamen kaldırıp Redis gibi harici bir önbellek kullanmak arasında nasıl bir seçim yapardık?
+9. `@Version` alanını **long** yerine bir **Instant *(zaman damgası)*** olarak tutsaydık ne değişirdi? Aynı milisaniyede yapılan iki güncelleme ve sunucular arasındaki saat farkı bu yaklaşımı etkiler miydi?
+10. **ArchUnit** kuralları sadece `sales` ve `shared` paketlerini analiz ediyor. `app` modülü ise **SalesStartup** içinde doğrudan **DataSource** kullanıyor. Bu modülü de analize dahil etmek için `quality/architecture-tests` modülünde neyi değiştirmemiz gerekir? `app` modülü için hangi kurallar anlamlı olur?
+
+## Bu bölümün kodu
+
+- [week15-jpa-persistence](src/week15-jpa-persistence)
+
+```powershell
+cd src\week15-jpa-persistence
+
+# Bu bölümdeki tüm modüllerin testleri (Docker yoksa PostgreSQL testleri atlanır)
+mvn clean install
+
+# Yalnızca repository sözleşme testleri
+mvn -pl sales -am test "-Dtest=InMemoryOrderRepositoryTest,JpaOrderRepositoryTest,PostgresOrderRepositoryTest,CustomerRepositoryContractTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+
+# Yalnızca mimari testler ve persistence unit ayarları
+mvn -pl quality/architecture-tests -am test "-Dtest=ArchitectureTest,PersistenceUnitSettingsTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+
+# Testleri EclipseLink SQL loglarıyla çalıştırmak
+$sql = "-DargLine=-Declipselink.logging.level.sql=FINE -Declipselink.logging.parameters=true"
+mvn -pl sales -am test $sql "-Dtest=JpaOrderRepositoryTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+Uygulamayı Payara Micro üzerinde çalıştırmak için kök klasördeki PostgreSQL konteynerini başlatıp WAR'ı yüklemek yeterli. Flyway açılışta V3 migration'ını uygular.
+
+```powershell
+docker compose up -d
+cd src\week15-jpa-persistence
+mvn clean install
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+SQL loglarını sunucuda da görmek için aynı özellikleri `-jar` parametresinden önce verebiliriz.
+
+```powershell
+java "-Declipselink.logging.level.sql=FINE" "-Declipselink.logging.parameters=true" -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+Eş zamanlı *(concurrent)* onay ve iptal isteklerini denemek için uygulama çalışırken ikinci bir terminalde powershell betiğini çalıştırabiliriz.
+
+```powershell
+pwsh tools\race-confirm-cancel.ps1
+```
 
 <!-- nav:bottom:start -->
 ---
