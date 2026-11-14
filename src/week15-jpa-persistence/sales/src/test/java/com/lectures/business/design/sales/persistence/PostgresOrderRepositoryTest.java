@@ -35,7 +35,7 @@ class PostgresOrderRepositoryTest extends OrderRepositoryContract {
         dataSource.setPassword(postgres.getPassword());
 
         cleanAndMigrate(dataSource);
-        JdbcOrderRepositoryTest.seedCustomers(dataSource);
+        TestDatabases.withDemoCustomers(dataSource);
         return new JdbcOrderRepository(dataSource);
     }
 

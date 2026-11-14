@@ -32,6 +32,7 @@
         <expressly.version>6.0.0</expressly.version>
         <yasson.version>3.0.4</yasson.version>
         <hibernate-validator.version>9.0.1.Final</hibernate-validator.version>
+        <eclipselink.version>5.0.0</eclipselink.version>
         <jakartaee.version>11.0.0</jakartaee.version>
         <microprofile-config.version>3.1</microprofile-config.version>
         <microprofile-openapi.version>3.1.1</microprofile-openapi.version>
@@ -110,7 +111,11 @@
                 <artifactId>yasson</artifactId>
                 <version>${yasson.version}</version>
             </dependency>
-            <!-- jersey-bean-validation brings 8.0.x; Payara 7 runs 9.0.1 -->
+            <dependency>
+                <groupId>org.eclipse.persistence</groupId>
+                <artifactId>org.eclipse.persistence.jpa</artifactId>
+                <version>${eclipselink.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.hibernate.validator</groupId>
                 <artifactId>hibernate-validator</artifactId>

@@ -18,8 +18,11 @@ class CustomerRepositoryContractTest {
     static Stream<Arguments> repositories() {
         return Stream.of(
                 Arguments.of("in-memory", (Supplier<CustomerRepository>) InMemoryCustomerRepository::new),
-                Arguments.of("jdbc-h2", (Supplier<CustomerRepository>) ()
-                        -> new JdbcCustomerRepository(TestDatabases.h2())));
+                Arguments.of("jpa-h2", (Supplier<CustomerRepository>) () -> {
+                    JpaUnit unit = JpaUnit.on(TestDatabases.h2());
+                    return unit.transactional(CustomerRepository.class,
+                            new JpaCustomerRepository(unit.entityManager()));
+                }));
     }
 
     @ParameterizedTest(name = "{0}")

@@ -11,30 +11,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.lectures.business.design.sales.domain.Customer;
-import com.lectures.business.design.sales.domain.CustomerId;
 import com.lectures.business.design.sales.domain.OrderBuilder;
 import com.lectures.business.design.sales.domain.OrderId;
-import com.lectures.business.design.shared.kernel.Address;
 
 class JdbcOrderRepositoryTest extends OrderRepositoryContract {
 
     private DataSource dataSource;
     private LocalTransactions transactions;
 
-    static void seedCustomers(DataSource dataSource) {
-        CustomerRepository customers = new JdbcCustomerRepository(dataSource);
-        customers.save(new Customer(CustomerId.of("VINET"), "Vins et alcools Chevalier",
-                new Address("59 rue de l'Abbaye", "Reims", "51100", "France")));
-        customers.save(new Customer(CustomerId.of("TOMSP"), "Toms Spezialitaten",
-                new Address("Luisenstr. 48", "Munster", "44087", "Germany")));
-    }
-
     @Override
     protected OrderRepository createRepository() {
         transactions = new LocalTransactions(TestDatabases.h2());
         dataSource = transactions.dataSource();
-        seedCustomers(dataSource);
+        TestDatabases.withDemoCustomers(dataSource);
         return new JdbcOrderRepository(dataSource);
     }
 
