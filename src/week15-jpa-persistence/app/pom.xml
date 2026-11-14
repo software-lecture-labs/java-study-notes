@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.lectures</groupId>
+        <artifactId>week15-jpa-persistence</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>week15-app</artifactId>
+    <packaging>war</packaging>
+    <name>Week 15 / app</name>
+    <description>
+        The deployable web application. What used to be SalesModule and the
+        main methods is now a handful of CDI producers and a startup observer;
+        the server does the rest. Stays out of the ArchUnit scope.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lectures</groupId>
+            <artifactId>week15-sales</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lectures</groupId>
+            <artifactId>week15-shared-kernel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.platform</groupId>
+            <artifactId>jakarta.jakartaee-web-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.microprofile.config</groupId>
+            <artifactId>microprofile-config-api</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>sales</finalName>
+    </build>
+</project>
