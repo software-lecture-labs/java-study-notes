@@ -452,6 +452,491 @@ curl -i -X POST localhost:8080/sales/api/orders -H "Content-Type: application/js
 
 Olmayan bir müşteri için yine `customer-not-found` koduyla bir 404 problemi dönüyor. **CustomerRepository** sözleşmesindeki **getById** metodu değişmediği için **CustomerNotFoundException** fırlatılmaya devam ediyor.
 
+## Siparişler: Bir Aggregate ve Koleksiyonu
+
+**Order** aggregate'i iki tabloya yayılıyor. Sipariş başlığı `orders` tablosunda, sipariş kalemleri ise `order_lines` tablosunda duruyor. **JdbcOrderRepository** sınıfında bunu kendimiz yönetmiştik. Kaydederken başlığı güncelliyor, kalemlerin hepsini silip yeniden yazılıyordu. Okuma işlemlerinde de N+1 probleminden kaçınmak için iki ayrı sorgu çalıştırıp sonuçları bellekte birleştiriyorduk. Şimdi bu fonksiyonelliklerin JPA karşılıklarını yazacağız.
+
+### Sipariş Kalemleri: `@ElementCollection`
+
+**OrderLine** domain'de bir record, yani kimliği olmayan bir value object olarak kullanılıyor. **JPA** tarafında kimliği olmayan nesnelerden oluşan bir koleksiyon `@ElementCollection` ile eşleştirilir. Koleksiyonun elemanları `@Embeddable` niteliği kazandırılmış bir sınıf olur ve kendi tablosunda *(collection table)* sahibi olan entity'nin kimliğiyle birlikte saklanır. Müşteri adresinde yaptığımız gibi önce kalem kolonlarını tarif eden OrderLineColumns sınıfını `persistence` paketine aşağıdaki gibi ekleyelim.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import com.lectures.business.design.sales.domain.OrderLine;
+import com.lectures.business.design.shared.kernel.Money;
+import jakarta.persistence.Column;
+import jakarta.persistence.Embeddable;
+import java.math.BigDecimal;
+import java.util.Currency;
+
+@Embeddable
+public class OrderLineColumns {
+
+    @Column(name = "line_no", nullable = false)
+    private int lineNo;
+
+    @Column(name = "product_id", nullable = false)
+    private int productId;
+
+    @Column(name = "unit_price", nullable = false, precision = 10, scale = 2)
+    private BigDecimal unitPrice;
+
+    @Column(name = "currency", nullable = false, length = 3)
+    private String currency;
+
+    @Column(name = "quantity", nullable = false)
+    private int quantity;
+
+    @Column(name = "discount", nullable = false, precision = 3, scale = 2)
+    private BigDecimal discount;
+
+    protected OrderLineColumns() {
+    }
+
+    static OrderLineColumns from(int lineNo, OrderLine line) {
+        OrderLineColumns columns = new OrderLineColumns();
+        columns.lineNo = lineNo;
+        columns.productId = line.productId();
+        columns.unitPrice = line.unitPrice().amount();
+        columns.currency = line.unitPrice().currency().getCurrencyCode();
+        columns.quantity = line.quantity();
+        columns.discount = line.discount();
+        return columns;
+    }
+
+    OrderLine toOrderLine() {
+        return new OrderLine(productId, new Money(unitPrice, Currency.getInstance(currency)), quantity, discount);
+    }
+}
+```
+
+**Money** değer nesnesi iki kolonla *(`unit_price` ve `currency`)* ifade ediliyor. Domain'de olmayan **lineNo** alanı ise kalemlerin sırasını korumak için kullanılmakta. Kalemlerin sıralaması bu alan üzerinden takip ediliyor.
+
+> JPA'nın sıralı listeler için `@OrderColumn` diye bir anotasyonu da var. Bu anotasyon sıra numarasını kendisi yönetir ama numaralandırmaya 0'dan başlar. Mevcut tablomuzdaki kayıtlar 1'den başladığı için sıra numarasını kendimiz veriyor ve okurken `@OrderBy("lineNo")` ile sıralıyoruz.
+
+### Sipariş Entity'si
+
+Şimdi siparişin başlığını ve kalemlerini bir arada eşleştiren entity sınıfını yazalım. İşte **OrderEntity** içeriği.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import com.lectures.business.design.sales.domain.CustomerId;
+import com.lectures.business.design.sales.domain.Order;
+import com.lectures.business.design.sales.domain.OrderId;
+import com.lectures.business.design.sales.domain.OrderLine;
+import com.lectures.business.design.sales.domain.OrderStatus;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.CollectionTable;
+import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OrderBy;
+import jakarta.persistence.Table;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+@Entity
+@Table(name = "orders")
+public class OrderEntity {
+
+    @Id
+    @Column(name = "order_id")
+    private Integer orderId;
+
+    @Column(name = "customer_id", nullable = false, length = 5)
+    private String customerId;
+
+    @Column(name = "order_date", nullable = false)
+    private LocalDate orderDate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 16)
+    private OrderStatus status;
+
+    @Embedded
+    @AttributeOverride(name = "street", column = @Column(name = "ship_street"))
+    @AttributeOverride(name = "city", column = @Column(name = "ship_city"))
+    @AttributeOverride(name = "postalCode", column = @Column(name = "ship_postal_code"))
+    @AttributeOverride(name = "country", column = @Column(name = "ship_country"))
+    private AddressColumns shippingAddress;
+
+    @Column(name = "shipped_date")
+    private LocalDate shippedDate;
+
+    @ElementCollection
+    @CollectionTable(name = "order_lines", joinColumns = @JoinColumn(name = "order_id"))
+    @OrderBy("lineNo")
+    private List<OrderLineColumns> lines = new ArrayList<>();
+
+    protected OrderEntity() {
+    }
+
+    static OrderEntity from(Order order) {
+        OrderEntity entity = new OrderEntity();
+        entity.orderId = order.orderId().value();
+        entity.customerId = order.customerId().value();
+        entity.orderDate = order.orderDate();
+        entity.status = order.status();
+        entity.shippingAddress = order.shippingAddress().map(AddressColumns::from).orElse(null);
+        entity.shippedDate = order.shippedDate().orElse(null);
+        int lineNo = 1;
+        for (OrderLine line : order.lines()) {
+            entity.lines.add(OrderLineColumns.from(lineNo++, line));
+        }
+        return entity;
+    }
+
+    Order toDomain() {
+        return Order.reconstitute(
+                OrderId.of(orderId),
+                CustomerId.of(customerId),
+                orderDate,
+                status,
+                shippingAddress == null ? null : shippingAddress.toAddress(),
+                shippedDate,
+                lines.stream().map(OrderLineColumns::toOrderLine).toList());
+    }
+}
+```
+
+Bu sınıfta bizim için yeni olan birkaç kavram var.
+
+- **`@AttributeOverride` :** Müşteri tablosu için yazdığımız **AddressColumns** sınıfını burada tekrar kullanıyoruz. Ancak siparişlerde adres kolonlarının adları farklı *(`ship_street`, `ship_city` vb.)*. `@AttributeOverride`, gömülen sınıfın kolon adlarını bu entity için yeniden tanımlıyor. Teslimat adresi olmayan bir siparişte dört kolon da **NULL** olacaktır. JPA da okurken dört kolonun hepsi boşsa gömülü nesneyi **null** olarak döndürür.
+- **`@Enumerated(EnumType.STRING)`:** **OrderStatus** değerleri tabloya `DRAFT`, `SHIPPED` gibi metinler olarak yazılıyor. Varsayılan değer `ORDINAL` olsaydı enum'ın sıra numarası *(0, 1, 2...)* yazılırdı ve enum'a araya yeni bir değer eklemek mevcut verinin anlamını çaktırmadan bozardı. **OrderStatus** domain'e ait bir tip. Persistence paketi domain'i görebildiği için *(ADR-0003)* entity'de doğrudan kullanabiliyoruz.
+- **`@ElementCollection` ve `@CollectionTable`:** Kalemlerin `order_lines` tablosunda durduğunu ve bu tabloya `order_id` kolonuyla bağlandığını söylüyor. Koleksiyon varsayılan olarak **lazy** modda yüklenir. Yani sipariş okunduğunda kalemler hemen çekilmez, onun yerine listeye ilk erişildiğinde ayrı bir sorgu ile alınır.
+- **toDomain:** Sadece persistence paketinin çağırabildiği `Order.reconstitute()` metodunu kullanıyor. Entity'den domain nesnesine geçiş tek bir yerde yapılıyor.
+
+### JpaOrderRepository
+
+Sırada repository sınıfı var. **JpaOrderRepository**'yi `persistence` paketine aşağıdaki haliyle ekleyelim.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import com.lectures.business.design.sales.domain.Order;
+import com.lectures.business.design.sales.domain.OrderId;
+import com.lectures.business.design.shared.kernel.Specification;
+import jakarta.enterprise.context.Dependent;
+import jakarta.inject.Inject;
+import jakarta.persistence.EntityManager;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+@Dependent
+public final class JpaOrderRepository implements OrderRepository {
+
+    private static final String ALL_ORDERS_WITH_LINES = """
+            SELECT DISTINCT o
+              FROM OrderEntity o
+              LEFT JOIN FETCH o.lines
+             ORDER BY o.orderId
+            """;
+
+    private final EntityManager entityManager;
+
+    @Inject
+    public JpaOrderRepository(EntityManager entityManager) {
+        this.entityManager = Objects.requireNonNull(entityManager, "entityManager must not be null");
+    }
+
+    @Override
+    public void save(Order order) {
+        Objects.requireNonNull(order, "order must not be null");
+        entityManager.merge(OrderEntity.from(order));
+    }
+
+    @Override
+    public Optional<Order> findById(OrderId orderId) {
+        Objects.requireNonNull(orderId, "orderId must not be null");
+        return Optional.ofNullable(entityManager.find(OrderEntity.class, orderId.value()))
+                .map(OrderEntity::toDomain);
+    }
+
+    @Override
+    public List<Order> findAll() {
+        return entityManager.createQuery(ALL_ORDERS_WITH_LINES, OrderEntity.class)
+                .setHint("eclipselink.read-only", true)
+                .getResultStream()
+                .map(OrderEntity::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<Order> findAll(Specification<Order> specification) {
+        Objects.requireNonNull(specification, "specification must not be null");
+        return findAll().stream()
+                .filter(specification::isSatisfiedBy)
+                .toList();
+    }
+
+    @Override
+    public long count() {
+        return entityManager.createQuery("SELECT COUNT(o) FROM OrderEntity o", Long.class).getSingleResult();
+    }
+}
+```
+
+**JdbcOrderRepository** sınıfında epeyce çok satır vardı. Burada SQL yerine bir **JPQL** *(Jakarta Persistence Query Language)* sorgusu var. JPQL tablolar ve kolonlar yerine entity'ler ve alanlarıyla çalışır. `OrderEntity o` bir tabloyu değil bir entity nesnesini, `o.lines` ise bir kolonu değil bir koleksiyonu ifade eder. Bu sınıfın neredeyse her satırı kayda değer bilgiler içeriyor. Bunları dikkatlice inceleyelim.
+
+> Öncesinde SQL Loglarını Görmek
+>
+> Şimdiki denemeler sırasında, EclipseLink'in SQL loglaması açmamız işimizi kolaylaştıracaktır. Oluşturulan SQL ifadelerini görmek için **JpaUnit** sınıfının **on** metodundaki özelliklere geçici olarak aşağıdaki iki satırı ekleyip ilgili testleri çalıştırmamız yeterli.
+>
+> ```java
+> "eclipselink.logging.level.sql", "FINE",
+> "eclipselink.logging.parameters", "true"
+> ```
+>
+> Payara üzerinde ise aynı özellikleri `persistence.xml` dosyasının **properties** kısmına ekleyebiliriz. Loglar `server.log` dosyasına yazılır. JPA ile çalışırken üretilen SQL'i düzenli olarak görmek, N+1 gibi sorunları erken fark etmenin en kolay yoludur.
+
+### merge Kalemleri Nasıl Güncelliyor?
+
+Daha önceden kalemleri güncellemenin oldukça basit bir yolunu seçmiştik. Bir siparişin kalemlerini tamamen silip yeniden yazıyorduk. `ADR-0008` kararlarında bunun alternatifinin değişiklik takibi *(dirty checking)* olduğunu ve bu işin JPA'ya bırakılacağını da yazmıştık. Şimdi JPA'nın ne yaptığını görelim. Sözleşme testlerindeki **saveIsUpsertOfTheWholeAggregate** testi, taslak bir siparişe yeni bir kalem ekleyip eski kalemi çıkarıyor ve siparişi kaydediyor. Önce testi çalıştıralım.
+
+```powershell
+# week15-jpa-persistence klasöründe çalıştırmalıyız
+$sql = "-DargLine=-Declipselink.logging.level.sql=FINE -Declipselink.logging.parameters=true"
+mvn -q -pl sales -am test $sql "-Dtest=JpaOrderRepositoryTest#saveIsUpsertOfTheWholeAggregate" "-Dsurefire.failIfNoSpecifiedTests=false" | Select-String "EL Fine"
+```
+
+EclipseLink'in SQL loglarını açtığımızda bu kayıt için şu cümlelerin çalıştığını görüyoruz.
+
+![SQL Logları](./images/week_15_04.png)
+
+Sırasıyla orders tablosundan `order_id` ye göre bir select, ardından `order_lines` tablosunda aynı `order_id` ye sahip satırları için bir select, sonra çıkarılan kalem için bir delete ve eklenen kalem için bir insert çalışır. Yani;
+
+- **merge** önce siparişi ve kalemlerini veritabanından okuyor. Elimizdeki **OrderEntity** hiçbir persistence context'e bağlı değil *(detached)* ve JPA neyin değiştiğini bilmek için mevcut hali görmek zorunda.
+- Ardından iki koleksiyonu karşılaştırıyor. Çıkarılan kalem için bir **DELETE**, eklenen kalem için bir **INSERT** ifadesi yürütülüyor. Değişmeyen kalemlere dokunulmuyor. Sipariş başlığında bir değişiklik olmadığı için başlık için bir **UPDATE** de söz konusu değil.
+- **DELETE** cümlesinin **WHERE** kısmına dikkat edelim. Kalemin bütün kolonları orada. Gömülü nesnelerin kimliği yoktur. JPA bir kalemi ancak tüm değerleriyle tanıyabilir. Değer nesnesinin tanımı tam olarak bu *(Kimliği yoktur, değerleriyle tanınır).*
+
+Daha önceden kullandığımız *"hepsini sil, hepsini yaz"* yaklaşımı her kayıtta kalem sayısının iki katı kadar SQL çalıştırılmasına neden oluyordu. JPA ise sadece değişen kalemler için SQL üretiyor ama bunun için önce bir okuma yapıyor. Hangisinin daha verimli olduğu, aggregate'lerin ne kadar büyük olduğuna ve ne sıklıkla değiştiğine bağlı olduğu için tartışmaya açık bir konu.
+
+### N+1 Problemi Geri mi Dönüyor?
+
+**findAll** metodunu ilk yazdığımızda sorgu sadece `SELECT o FROM OrderEntity o ORDER BY o.orderId` şeklindeydi. Testler geçse de SQL loglarına bakmak önemli. Fazladan bir sorgu daha çalışıyor. Kalemler lazy load olduğu için JPA her siparişin kalemlerine **toDomain** içinde erişildiği anda ayrı bir sorgu çalıştırıyor. Bin sipariş varsa bu bin bir sorgu anlamına geliyor. Testler bunu yakalamaz, çünkü sonuç doğrudur. Sadece yavaştır. **JPA** ile çalışırken SQL loglarını açık tutmanın önemi burada ortaya çıkıyor. Çözüm, JPQL'in **JOIN FETCH** ifadesinde. Bu ifade, ilişkili koleksiyonun aynı sorguda bir **JOIN** ile getirilmesini söyler. Bu nedenle `ALL_ORDERS_WITH_LINES` aşağıdaki gibi yazılmalıdır.
+
+```sql
+SELECT DISTINCT o
+  FROM OrderEntity o
+  LEFT JOIN FETCH o.lines
+ ORDER BY o.orderId
+```
+
+- **LEFT:** Kalemi olmayan siparişler de sonuçta yer alsın.
+- **DISTINCT:** Bir JOIN sonucunda iki kalemli bir sipariş iki satır olarak döner. JPQL'deki **DISTINCT**, aynı entity'nin sonuç listesinde iki kez yer almasını engeller.
+
+### Sekans ve Native Sorgular
+
+**SequenceOrderIdGenerator** da artık **DataSource** yerine **EntityManager** kullanıyor. JPQL'in veritabanı sekansları için bir karşılığı olmadığından burada **native sorgu** *(doğrudan SQL)* kullanıyoruz. Söz konusu sınıfı aşağıdaki gibi güncelleyelim.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import com.lectures.business.design.sales.domain.OrderId;
+import com.lectures.business.design.sales.domain.OrderIdGenerator;
+import jakarta.enterprise.context.Dependent;
+import jakarta.inject.Inject;
+import jakarta.persistence.EntityManager;
+import java.util.Objects;
+
+@Dependent
+public final class SequenceOrderIdGenerator implements OrderIdGenerator {
+
+    private final EntityManager entityManager;
+
+    @Inject
+    public SequenceOrderIdGenerator(EntityManager entityManager) {
+        this.entityManager = Objects.requireNonNull(entityManager, "entityManager must not be null");
+    }
+
+    @Override
+    public OrderId next() {
+        Number next = (Number) entityManager.createNativeQuery("SELECT nextval('orders_seq')").getSingleResult();
+        return OrderId.of(next.intValue());
+    }
+}
+```
+
+Native sorgunun sonucunun tipi veritabanına ve sürücüye göre değişebilir *(PostgreSQL'de `Long`, bazı veritabanlarında `BigInteger` veya `BigDecimal`)*. Bu yüzden sonucu ortak üst tip olan **Number** olarak alıp `intValue()` ile dönüştürüyoruz.
+
+> JPA'nın kendi kimlik üretme mekanizması da var *(`@GeneratedValue` ve `@SequenceGenerator`)*. Ancak bu mekanizma kimliği entity kaydedilirken üretmekte. Bizim domain modelimizde ise sipariş numarası, sipariş **OrderFactory** tarafından oluşturulduğu anda belli olmalı. Kimlik üretme işini domain'deki **OrderIdGenerator** portunda bırakıyoruz.
+
+### Persistence Unit ve Silinenler
+
+Yeni entity'leri `persistence.xml` dosyasındaki listeye ekleyelim.
+
+```xml
+<class>com.lectures.business.design.sales.persistence.CustomerEntity</class>
+<class>com.lectures.business.design.sales.persistence.AddressColumns</class>
+<class>com.lectures.business.design.sales.persistence.OrderEntity</class>
+<class>com.lectures.business.design.sales.persistence.OrderLineColumns</class>
+```
+
+**JdbcOrderRepository** ve **RepositoryException** sınıflarına artık ihtiyacımız kalmadı. Test tarafında da **JDBC** için yazdığımız **LocalTransactions** sınıfının yerini **JpaUnit** alacak. Bu üç sınıfı silelim ve **JdbcOrderRepositoryTest** sınıfının adını **JpaOrderRepositoryTest** olarak değiştirelim.
+
+```powershell
+cd src\week15-jpa-persistence\sales\src
+git rm main/java/com/lectures/business/design/sales/persistence/JdbcOrderRepository.java `
+       main/java/com/lectures/business/design/sales/persistence/RepositoryException.java `
+       test/java/com/lectures/business/design/sales/persistence/LocalTransactions.java
+git mv test/java/com/lectures/business/design/sales/persistence/JdbcOrderRepositoryTest.java `
+       test/java/com/lectures/business/design/sales/persistence/JpaOrderRepositoryTest.java
+```
+
+**RepositoryException** sınıfını, **SQLException** tipinin repository sözleşmelerine sızmasını önlemek için yazmıştık. JPA'nın exception'ları ise zaten **PersistenceException** sınıfından türeyen ve checked olmayan exception türleri. Dolayısıyla **ProblemMapperTest** sınıfındaki **unexpectedFailuresAreOpaque** testinde **RepositoryException** yerine şu ifadeyi kullanabiliriz.
+
+```java
+new PersistenceException("could not save order 10248", new SQLException())
+```
+
+**ProblemMapper** bu tür hataları zaten HTTP 500 olarak eşliyor ve hiçbir ayrıntıyı sızdırmıyor.
+
+### Write-Behind ile Sözleşme Testleri
+
+**JpaOrderRepositoryTest** sınıfının tam hali aşağıdaki gibi.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import com.lectures.business.design.sales.domain.OrderBuilder;
+import com.lectures.business.design.sales.domain.OrderId;
+import com.lectures.business.design.sales.domain.OrderIdGenerator;
+import jakarta.persistence.PersistenceException;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class JpaOrderRepositoryTest extends OrderRepositoryContract {
+
+    private DataSource dataSource;
+    private JpaUnit unit;
+
+    @Override
+    protected OrderRepository createRepository() {
+        dataSource = TestDatabases.withDemoCustomers(TestDatabases.h2());
+        unit = JpaUnit.on(dataSource);
+        return unit.transactional(OrderRepository.class, new JpaOrderRepository(unit.entityManager()));
+    }
+
+    @Test
+    @DisplayName("the foreign key refuses an order for a customer that does not exist, at commit")
+    void unknownCustomerIsRejectedByTheDatabase() {
+        assertThatThrownBy(() -> repository.save(OrderBuilder.anOrder()
+                .withId(10300).forCustomer("ALFKI").withLine(11, "14.00", 1).build()))
+                .isInstanceOf(PersistenceException.class)
+                .hasRootCauseInstanceOf(SQLException.class);
+        assertThat(repository.findById(OrderId.of(10300))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a commit that fails leaves no half-written aggregate behind")
+    void failedCommitWritesNothing() throws SQLException {
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE order_lines ADD CONSTRAINT ck_sabotage CHECK (quantity <> 7)");
+        }
+
+        assertThatThrownBy(() -> repository.save(OrderBuilder.anOrder()
+                .withId(10301).forCustomer("VINET").withLine(11, "14.00", 7).build()))
+                .isInstanceOf(PersistenceException.class);
+        assertThat(repository.findById(OrderId.of(10301))).isEmpty();
+        assertThat(repository.count()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("findAll reads each order once, with all of its lines")
+    void findAllJoinsTheLines() {
+        repository.save(OrderBuilder.anOrder()
+                .withId(10302).forCustomer("VINET").withLine(11, "14.00", 2).withLine(42, "9.80", 3).build());
+
+        assertThat(repository.findAll())
+                .filteredOn(order -> order.orderId().value() == 10302)
+                .singleElement()
+                .satisfies(order -> assertThat(order.productIds()).containsExactly(11, 42));
+    }
+
+    @Test
+    @DisplayName("ids come from the database sequence and survive a restart")
+    void sequenceHandsOutIds() {
+        OrderIdGenerator first = unit.transactional(OrderIdGenerator.class,
+                new SequenceOrderIdGenerator(unit.entityManager()));
+        OrderIdGenerator afterRestart = unit.transactional(OrderIdGenerator.class,
+                new SequenceOrderIdGenerator(JpaUnit.on(dataSource).entityManager()));
+        assertThat(first.next().value()).isEqualTo(10248);
+        assertThat(afterRestart.next().value()).isEqualTo(10249);
+    }
+}
+```
+
+JDBC testleriyle karşılaştırdığımızda nelerin değiştiğini görelim;
+
+- **Hata ne zaman geliyor?** **unknownCustomerIsRejectedByTheDatabase** testi artık **RepositoryException** değil **PersistenceException** bekliyor. Daha da önemlisi, hata **merge** çağrısından değil test proxy'sinin yaptığı commit'ten geliyor. Bu bölümde bahsettiğimiz `write-behind` davranışı burada somutlaşıyor. Sunucuda da aynı şey olur. Olmayan bir müşteriye ait sipariş, `@Transactional` interceptor'ı commit ederken reddedilir ve kullanım senaryosunun dışına bir **TransactionalException** olarak fırlatılır. **OrderService** müşterinin varlığını zaten **getById** ile kontrol ettiği için bu durum normal akışta yaşanmaz.
+- **Atomiklik:** **saveIsAtomicInsideATransaction** ve **saveIsNotAtomicOnItsOwn** testlerinin yerini tek bir test aldı. JPA'da yazma işlemleri zaten transaction'ın sonunda topluca yapıldığı için yarım kalmış bir aggregate ancak commit yarıda kalırsa oluşabilir ve rollback bunu engeller. Transaction olmadan **merge** çağırmak ise hiçbir şey yazmaz.
+- **Sekans testi:** **SequenceOrderIdGenerator** da bir transaction içinde çalışıyor. *"Yeniden başlatma"* durumunu ikinci bir **JpaUnit**, yani yeni bir **EntityManager** ile taklit ediyoruz.
+
+İşimiz bitmedi. **PostgresOrderRepositoryTest** sınıfındaki **createRepository** metodunun son satırını da aşağıdaki gibi değiştirelim.
+
+```java
+JpaUnit unit = JpaUnit.on(dataSource);
+return unit.transactional(OrderRepository.class, new JpaOrderRepository(unit.entityManager()));
+```
+
+Böylece aynı sözleşme **InMemory**, **H2** ve **Testcontainers** ile **PostgreSQL** üzerinde **JPA** implementasyonu için de çalışacak.
+
+### Payara İle Tekrar Deneyelim
+
+Artık uygulamanın tüm persistence katmanı JPA üzerinde çalışıyor. **SalesStartup** içindeki Flyway hariç uygulamada **DataSource** kullanan bir sınıf kalmadı. Derleyip Payara'yı başlatalım ve iki sipariş oluşturalım.
+
+```text
+curl -i -X POST localhost:8080/sales/api/orders -H "Content-Type: application/json" \
+     -d '{"customerId":"VINET","lines":[{"productId":11,"unitPrice":14.00,"quantity":10},{"productId":42,"unitPrice":9.80,"quantity":5,"discount":0.10}]}'
+```
+
+![Creating an Order with JPA](./images/week_15_05.png)
+
+İlk siparişi onaylayıp kargolayalım, ikinciyi ise taslak halindeyken kargolamaya çalışıp ardından iptal edelim *(Bu çalışma sırasında 10253 ve 10254 sipariş numaraları oluştu)*.
+
+```text
+curl -i -X POST localhost:8080/sales/api/orders/10253/confirm
+curl -i -X POST localhost:8080/sales/api/orders/10253/ship
+```
+
+![Confirm 10253](./images/week_15_06.png)
+
+![Shipped 10253](./images/week_15_07.png)
+
+```text
+curl -i -X POST localhost:8080/sales/api/orders/10254/ship
+curl -i -X POST localhost:8080/sales/api/orders/10254/cancel
+```
+
+![Conflict with current state](./images/week_15_08.png)
+
+![Canceled order](./images/week_15_09.png)
+
+İlk iki istek başarılı oldu ve gözlemciler commit sonrasında bildiri gönderdi. Üçüncü istek `invalid-state-transition` koduyla 409 dönerken, dördüncüsü siparişi iptal etti. Veritabanına baktığımızda iki kalemin de `line_no` değerleriyle doğru yazıldığını görmemiz gerekiyor.
+
+```powershell
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT order_id, line_no, product_id, quantity, discount FROM order_lines ORDER BY 1, 2"
+```
+
+![SQL Result](./images/week_15_10.png)
+
+Şu noktaya dikkat edelim. **HTTP** katmanında, kullanım senaryolarında veya domain'de hiçbir şey değişmedi. Daha önceden hazırladığımı **JerseyTest** beklentileri ve **Insomnia** koleksiyonu aynen geçerli.
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
