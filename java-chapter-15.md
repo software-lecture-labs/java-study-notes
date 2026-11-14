@@ -1382,6 +1382,175 @@ java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperti
 
 Önbellek bir performans kararı ve performans kararları ölçümler yapılarak verilmelidir. Bizim uygulamamızda tek bir müşteri sorgusunun maliyeti, yanlış bir adrese gönderilen bir siparişin maliyetinin yanında önemsiz. Bu kararı da ADR-0011 belgesinde yazmamız gerekecek.
 
+## Mimari Kurallar ve ADR-0011
+
+Bu bölümde aldığımız kararları [ADR-0011-JPA ile Persistence: Ayrı Entity'ler, Flyway ve İyimser Kilitleme](docs/adr/ADR-0011.md) isimli belgede topluyoruz. Kararlardan biri `ADR-0008` belgesini de güncelliyor. Repository implementasyonları artık JDBC değil JPA kullanıyor. Önceki bölümlerde yaptığımız gibi `ADR-0008`'e bir not düşüyor ve yeni kararı `ADR-0011`'de yazıyoruz.
+
+Bölümün başında ayrı persistence entity'lerini seçerken iki şeyi korumak istemiştik. Domain katmanı JPA'yı tanımaMAlı ve entity'ler `persistence` paketinin dışına çıkmaMAlı. İlki zaten `ADR-0004` belgesindeki `domain_is_framework_free` kuralı ile korunuyor. İkincisi için **ArchitectureTest** sınıfına yeni kurallar eklemeliyiz. `quality/architecture-tests` modülü Jakarta EE API'sini test kapsamında kullandığı için yeni bir bağımlılığa gerek yok. **observeDomainEventsOnlyAfterSuccess** metodundan önce aşağıdaki kuralları ekleyelim.
+
+```java
+// ADR-0011 JPA persistence
+@ArchTest
+static final ArchRule jpa_stays_in_persistence = noClasses()
+        .that().resideOutsideOfPackage("..sales.persistence..")
+        .should().dependOnClassesThat().resideInAPackage("jakarta.persistence..");
+
+@ArchTest
+static final ArchRule mapped_classes_live_in_persistence = classes()
+        .that().areAnnotatedWith(Entity.class).or().areAnnotatedWith(Embeddable.class)
+        .should().resideInAPackage("..sales.persistence..");
+
+@ArchTest
+static final ArchRule entities_do_not_leak = noClasses()
+        .that().resideOutsideOfPackage("..sales.persistence..")
+        .should().dependOnClassesThat().areAnnotatedWith(Entity.class)
+        .orShould().dependOnClassesThat().areAnnotatedWith(Embeddable.class);
+
+@ArchTest
+static final ArchRule application_sees_only_repository_contracts = noClasses()
+        .that().resideInAPackage("..sales.application..")
+        .should().dependOnClassesThat(resideInAPackage("..sales.persistence..").and(not(INTERFACES)));
+```
+
+| **Kural *(ArchRule alanı)*** | **ADR** | **Neyi Doğrular?** |
+| --- | :---: | --- |
+| **jpa_stays_in_persistence** | 0011 | `jakarta.persistence` paketini sadece `sales.persistence` paketinin kullandığını doğrular. Bir kullanım senaryosunun **EntityManager** enjekte etmesi ya da **OptimisticLockException** yakalaması bu kurala takılır. |
+| **mapped_classes_live_in_persistence** | 0011 | `@Entity` ve `@Embeddable` ile işaretlenmiş her sınıfın `sales.persistence` paketinde durduğunu doğrular. Domain paketine bir entity eklemek zaten `domain_is_framework_free` kuralına takılır. Bu kural `api` veya `application` gibi diğer paketleri de kapsar. |
+| **entities_do_not_leak** | 0011 | `persistence` paketinin dışındaki hiçbir sınıfın bir entity'ye bağımlı olmadığını doğrular. Bir sınıf **OrderEntity** tipini kullanırken `jakarta.persistence` paketini import etmek zorunda değildir. Bu yüzden ilk kural tek başına yeterli değil. |
+| **application_sees_only_repository_contracts** | 0006, 0011 | `sales.application` paketinin `persistence` paketinden sadece arayüzleri *(repository sözleşmelerini)* gördüğünü doğrular. ADR-0006'daki `application_depends_on_contracts_not_implementations` kuralı sadece `InMemory` ile başlayan sınıfları yakalıyordu. **JpaOrderRepository** gibi yeni implementasyonlar bu kuralın gözünden kaçıyordu. |
+
+> **only_persistence_touches_jdbc** ve **repository_contracts_hide_sql_exceptions** kuralları ADR-0008'den kalıyor. `sales` modülünde artık JDBC kullanan bir sınıf yok ama kurallar yerinde durmalı. Biri yanlışlıkla bir repository'ye tekrar JDBC kodu eklerse yine yakalanabilmeli.
+
+### Persistence Unit Ayarlarını Test Etmek
+
+`ADR-0010`'da text türünden anahtarlarla verilen ayarların yanlış yazıldığında hiçbir uyarı vermediğini not etmiştik. `persistence.xml` dosyasındaki ayarlar da aynı riski taşıyor. Önbellek denemesinde gördüğümüz gibi `shared-cache-mode` değerinin **ALL** olması hiçbir testi kırmıyor ama yanlış adresli siparişlere yol açabiliyor. Şema üretimini açmak da **Flyway**'in sahipliğini sessizce elinden alıyor. **ArchUnit** bu dosyayı göremez. Bu yüzden `sales` modülünün `persistence` test paketine dosyayı okuyan küçük bir test daha ekleyelim.
+
+```java
+package com.lectures.business.design.sales.persistence;
+
+import java.io.InputStream;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class PersistenceUnitSettingsTest {
+
+    private static Element unit;
+
+    @BeforeAll
+    static void readPersistenceXml() throws Exception {
+        try (InputStream in = PersistenceUnitSettingsTest.class.getResourceAsStream("/META-INF/persistence.xml")) {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            Document document = factory.newDocumentBuilder().parse(in);
+            unit = (Element) document.getElementsByTagNameNS("*", "persistence-unit").item(0);
+        }
+    }
+
+    @Test
+    @DisplayName("the unit is a JTA unit on the application's data source")
+    void jtaOnTheApplicationDataSource() {
+        assertThat(unit.getAttribute("transaction-type")).isEqualTo("JTA");
+        assertThat(text("jta-data-source")).isEqualTo("java:app/jdbc/sales");
+    }
+
+    @Test
+    @DisplayName("only the listed entities are managed")
+    void onlyListedClasses() {
+        assertThat(text("exclude-unlisted-classes")).isEqualTo("true");
+    }
+
+    @Test
+    @DisplayName("the second-level cache is off")
+    void sharedCacheIsOff() {
+        assertThat(text("shared-cache-mode")).isEqualTo("NONE");
+    }
+
+    @Test
+    @DisplayName("Flyway owns the schema, JPA generates nothing")
+    void schemaGenerationIsOff() {
+        assertThat(property("jakarta.persistence.schema-generation.database.action")).isEqualTo("none");
+    }
+
+    private static String text(String tag) {
+        NodeList nodes = unit.getElementsByTagNameNS("*", tag);
+        return nodes.getLength() == 0 ? null : nodes.item(0).getTextContent().trim();
+    }
+
+    private static String property(String name) {
+        NodeList properties = unit.getElementsByTagNameNS("*", "property");
+        for (int i = 0; i < properties.getLength(); i++) {
+            Element property = (Element) properties.item(i);
+            if (property.getAttribute("name").equals(name)) {
+                return property.getAttribute("value");
+            }
+        }
+        return null;
+    }
+}
+```
+
+Testler **JpaUnit** sınıfının çalışma zamanında değiştirdiği ayarlara *(RESOURCE_LOCAL, H2 bağlantısı)* değil, **WAR** ile **Payara** uygulama sunucusuna giden dosyanın kendisine bakıyor. **JDK** ile gelen **DOM** ayrıştırıcısını kullandığımız için yeni bir bağımlılık da gerekmiyor. Bu testin bir sınırı var. Testler sadece bizim bildiğimiz ve önemsediğimiz ayarları sabitliyor. Dosyaya yanlış yazılmış yeni bir anahtar eklendiğinde yine hiçbir şey olmayacaktır.
+
+### Kuralları Kırarak Deneyelim
+
+Önce her şeyin yeşil olduğunu görmeliyiz.
+
+```powershell
+# week15-jpa-persistence klasöründe
+mvn -pl quality/architecture-tests -am test "-Dtest=ArchitectureTest,PersistenceUnitSettingsTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+**Deneme 1:** Çakışmayı repository yerine kullanım senaryosunda yakalamak akla yatkın gelebilir. **OrderService** sınıfının **change** metodunu geçici olarak aşağıdaki gibi değiştirelim.
+
+```java
+private OrderSummary change(int orderId, Consumer<Order> action) {
+    Order order = orders.getById(OrderId.of(orderId));
+    action.accept(order);
+    try {
+        orders.save(order);
+    } catch (OptimisticLockException e) {
+        throw new ConcurrentOrderChangeException(order.orderId());
+    }
+    events.publishAll(order.pullEvents());
+    return mapper.toSummary(order);
+}
+```
+
+Kod derleniyor ve uygulama çalışıyor. Ama **OrderService** artık hangi persistence teknolojisinin kullanıldığını biliyor ve **InMemory** repository ile yapılan testlerde bu **catch** bloğu hiç çalışmıyor. Mimari testleri çalıştıralım.
+
+```powershell
+mvn -pl quality/architecture-tests -am test "-Dtest=ArchitectureTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+![No classes that reside outside of package](./images/week_15_23.png)
+
+ArchUnit sadece import satırlarına değil bayt koduna da bakıyor. Bu yüzden ihlalin bir **catch** bloğu olduğunu ve hangi satırda olduğunu da söyleyebiliyor. *(Yaptığımız bu değişikliği geri almayı unutmayalım)*
+
+**Deneme 2:** Önbellek denemesindeki gibi `persistence.xml` dosyasında `shared-cache-mode` değerini **ALL** yapalım ve testi çalıştıralım.
+
+```powershell
+mvn -pl sales test "-Dtest=PersistenceUnitSettingsTest"
+```
+
+![Shared cache mode error](./images/week_15_24.png)
+
+Değişikliği geri alalım ve bütün testleri bir kez daha çalıştıralım.
+
+```powershell
+mvn clean install
+```
+
+Tüm testleri yeşil bayrak kaldırması gerekiyor.
+
+![All tests passed](./images/week_15_25.png)
+
 // DEVAM EDECEK
 
 <!-- nav:bottom:start -->
