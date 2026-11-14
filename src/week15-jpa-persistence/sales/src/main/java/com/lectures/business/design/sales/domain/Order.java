@@ -21,6 +21,7 @@ public final class Order {
     private OrderStatus status = OrderStatus.DRAFT;
     private Address shippingAddress;
     private LocalDate shippedDate;
+    private long version;
     private final List<OrderEvent> pendingEvents = new ArrayList();
 
     public Order(OrderId orderId, CustomerId customerId, LocalDate orderDate) {
@@ -30,8 +31,10 @@ public final class Order {
     }
 
     public static Order reconstitute(OrderId orderId, CustomerId customerId, LocalDate orderDate,
-            OrderStatus status, Address shippingAddress, LocalDate shippedDate, List<OrderLine> lines) {
+            OrderStatus status, Address shippingAddress, LocalDate shippedDate, List<OrderLine> lines,
+            long version) {
         Order order = new Order(orderId, customerId, orderDate);
+        order.version = version;
         order.status = Objects.requireNonNull(status, "status must not be null");
         order.shippingAddress = shippingAddress;
         order.shippedDate = shippedDate;
@@ -115,6 +118,10 @@ public final class Order {
     }
 
     // --- state begin ---
+    public long version() {
+        return version;
+    }
+
     public OrderId orderId() {
         return orderId;
     }

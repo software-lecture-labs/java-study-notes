@@ -1,5 +1,6 @@
 package com.lectures.business.design.sales.persistence;
 
+import com.lectures.business.design.sales.domain.ConcurrentOrderChangeException;
 import com.lectures.business.design.sales.domain.Order;
 import com.lectures.business.design.sales.domain.OrderId;
 import com.lectures.business.design.shared.kernel.Specification;
@@ -17,7 +18,12 @@ public final class InMemoryOrderRepository implements OrderRepository {
     @Override
     public void save(Order order) {
         Objects.requireNonNull(order, "order must not be null");
-        orders.put(order.orderId(), copyOf(order));
+        Order stored = orders.get(order.orderId());
+        long storedVersion = stored == null ? 0 : stored.version();
+        if (order.version() != storedVersion) {
+            throw new ConcurrentOrderChangeException(order.orderId());
+        }
+        orders.put(order.orderId(), copyOf(order, storedVersion + 1));
     }
 
     @Override
@@ -46,8 +52,12 @@ public final class InMemoryOrderRepository implements OrderRepository {
     }
 
     private static Order copyOf(Order order) {
+        return copyOf(order, order.version());
+    }
+
+    private static Order copyOf(Order order, long version) {
         return Order.reconstitute(order.orderId(), order.customerId(), order.orderDate(),
                 order.status(), order.shippingAddress().orElse(null),
-                order.shippedDate().orElse(null), order.lines());
+                order.shippedDate().orElse(null), order.lines(), version);
     }
 }

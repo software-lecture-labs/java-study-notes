@@ -139,7 +139,7 @@ class ArchitectureTest {
     static final ArchRule only_persistence_reconstitutes = noClasses()
             .that().resideOutsideOfPackage("..sales.persistence..")
             .should().callMethod(Order.class, "reconstitute", OrderId.class, CustomerId.class,
-                    LocalDate.class, OrderStatus.class, Address.class, LocalDate.class, List.class);
+                    LocalDate.class, OrderStatus.class, Address.class, LocalDate.class, List.class, long.class);
 
     @ArchTest
     static final ArchRule repository_contracts_hide_sql_exceptions = noMethods()

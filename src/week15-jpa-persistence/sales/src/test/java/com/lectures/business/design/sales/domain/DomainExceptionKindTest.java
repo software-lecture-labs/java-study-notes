@@ -20,6 +20,7 @@ class DomainExceptionKindTest {
                 Kind.CONFLICT, "order-not-modifiable");
         assertKind(new IncompleteOrderException(id, IncompleteOrderException.MissingPart.LINES),
                 Kind.RULE_VIOLATION, "incomplete-order");
+        assertKind(new ConcurrentOrderChangeException(id), Kind.CONFLICT, "concurrent-order-change");
     }
 
     private static void assertKind(DomainException exception, Kind kind, String code) {

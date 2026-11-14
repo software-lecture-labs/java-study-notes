@@ -1,5 +1,6 @@
 package com.lectures.business.design.sales.persistence;
 
+import com.lectures.business.design.sales.domain.ConcurrentOrderChangeException;
 import com.lectures.business.design.sales.domain.CustomerId;
 import com.lectures.business.design.sales.domain.Order;
 import com.lectures.business.design.sales.domain.OrderBuilder;
@@ -89,6 +90,35 @@ abstract class OrderRepositoryContract {
 
         assertThat(repository.count()).isEqualTo(4);
         assertThat(repository.getById(OrderId.of(10251)).productIds()).containsExactly(42);
+    }
+
+    @Test
+    @DisplayName("of two copies read together, only the first save wins")
+    void staleCopyIsRefused() {
+        Order first = repository.getById(OrderId.of(10251));
+        Order second = repository.getById(OrderId.of(10251));
+
+        first.confirm();
+        repository.save(first);
+        second.cancel();
+
+        assertThatThrownBy(() -> repository.save(second))
+                .isInstanceOf(ConcurrentOrderChangeException.class);
+        assertThat(repository.getById(OrderId.of(10251)).status()).isEqualTo(OrderStatus.CONFIRMED);
+    }
+
+    @Test
+    @DisplayName("every save moves the version on; a new aggregate starts at zero")
+    void versionsMoveOnWithEachSave() {
+        Order draft = OrderBuilder.anOrder().withId(10270).forCustomer("VINET").withLine(11, "14.00", 1).build();
+        assertThat(draft.version()).isZero();
+
+        repository.save(draft);
+        Order stored = repository.getById(OrderId.of(10270));
+        stored.confirm();
+        repository.save(stored);
+
+        assertThat(repository.getById(OrderId.of(10270)).version()).isEqualTo(stored.version() + 1);
     }
 
     @Test
