@@ -689,14 +689,20 @@ public final class JpaOrderRepository implements OrderRepository {
 
 > Öncesinde SQL Loglarını Görmek
 >
-> Şimdiki denemeler sırasında, EclipseLink'in SQL loglaması açmamız işimizi kolaylaştıracaktır. Oluşturulan SQL ifadelerini görmek için **JpaUnit** sınıfının **on** metodundaki özelliklere geçici olarak aşağıdaki iki satırı ekleyip ilgili testleri çalıştırmamız yeterli.
+> Şimdiki denemeler sırasında EclipseLink'in SQL loglarını açmak işimizi kolaylaştıracak. **JpaUnit** sınıfını değiştirmemize gerek yok. EclipseLink bu iki ayarı sistem özelliklerinden *(system properties)* de okuyor. Surefire'ın test JVM'ine `argLine` ile sistem özelliği geçebiliriz. PowerShell'de ayarı bir değişkende tutup ilgili testi çalıştırmak yeterli.
 >
-> ```java
-> "eclipselink.logging.level.sql", "FINE",
-> "eclipselink.logging.parameters", "true"
+> ```powershell
+> $sql = "-DargLine=-Declipselink.logging.level.sql=FINE -Declipselink.logging.parameters=true"
+> mvn -q -pl sales -am test $sql "-Dtest=JpaOrderRepositoryTest" "-Dsurefire.failIfNoSpecifiedTests=false" | Select-String "EL Fine"
 > ```
 >
-> Payara üzerinde ise aynı özellikleri `persistence.xml` dosyasının **properties** kısmına ekleyebiliriz. Loglar `server.log` dosyasına yazılır. JPA ile çalışırken üretilen SQL'i düzenli olarak görmek, N+1 gibi sorunları erken fark etmenin en kolay yoludur.
+> Payara üzerinde ise aynı özellikleri `-jar` parametresinden önce JVM'e veriyoruz. Loglar konsola ve `server.log` dosyasına yazılır.
+>
+> ```powershell
+> java "-Declipselink.logging.level.sql=FINE" "-Declipselink.logging.parameters=true" -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+> ```
+>
+> JPA ile çalışırken üretilen SQL'i düzenli olarak görmek, N+1 gibi sorunları erken fark etmenin en kolay yoludur.
 
 ### merge Kalemleri Nasıl Güncelliyor?
 
@@ -936,6 +942,344 @@ docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT
 ![SQL Result](./images/week_15_10.png)
 
 Şu noktaya dikkat edelim. **HTTP** katmanında, kullanım senaryolarında veya domain'de hiçbir şey değişmedi. Daha önceden hazırladığımı **JerseyTest** beklentileri ve **Insomnia** koleksiyonu aynen geçerli.
+
+## İyimser Kilitleme *(Optimistic Locking)* ve Kayıp Güncellemeler
+
+İki istemci aynı siparişi aynı anda değiştirmeye çalışırsa ne olur? Senaryolardan birisine göre iki istek siparişi okur, kendi değişikliğini yapar ve kaydeder. Son yazan kazanır ve ilk yazanın değişikliği sessizce kaybolur. **Kayıp güncelleme** *(lost update)* olarak da bilinen bir durumdur. Teoride kalmaması için bu durumu öncelikle gözlemleyelim.
+
+### Sorun
+
+Bunun için yardımcı bir betik kullanacağız. Amacımız race condition durumunu oluşturmak. **tools** klasöründe yer alan betiğin içeriği aşağıdaki gibi olacak.
+
+```powershell
+param(
+    [string]$BaseUrl = "http://localhost:8080/sales/api/orders",
+    [int]$Orders = 30
+)
+
+$body = '{"customerId":"VINET","lines":[{"productId":11,"unitPrice":14.00,"quantity":1}]}'
+$ids = 1..$Orders | ForEach-Object {
+    (Invoke-RestMethod -Method Post -Uri $BaseUrl -ContentType "application/json" -Body $body).orderId
+}
+
+$requests = $ids | ForEach-Object { "$_/confirm"; "$_/cancel" }
+$results = $requests | ForEach-Object -Parallel {
+    $response = Invoke-WebRequest -Method Post -Uri "$using:BaseUrl/$_" -SkipHttpErrorCheck
+    $code = if ([int]$response.StatusCode -ge 400) { ([System.Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray()) | ConvertFrom-Json).code } else { "" }
+    [pscustomobject]@{
+        OrderId = $_.Split('/')[0]
+        Action  = $_.Split('/')[1]
+        Status  = [int]$response.StatusCode
+        Code    = $code
+    }
+} -ThrottleLimit 60
+
+"Responses:"
+$results | Group-Object Status, Code | Select-Object Count, Name | Format-Table -AutoSize
+
+$bothSucceeded = @($results | Where-Object Status -eq 200 | Group-Object OrderId | Where-Object Count -eq 2 | ForEach-Object Name)
+"Orders where confirm and cancel both answered 200: $($bothSucceeded.Count)"
+"Their final status:"
+$bothSucceeded | ForEach-Object { Invoke-RestMethod "$BaseUrl/$_" } | Group-Object status | Select-Object Count, Name | Format-Table -AutoSize
+```
+
+Betik önce otuz adet taslak sipariş oluşturuyor. Ardından her sipariş için bir **confirm** ve bir **cancel** isteğini aynı anda, paralel olarak gönderiyor. Bu iki işlemin ikisi de bir taslak sipariş üzerinde geçerli.
+
+Bir siparişe gelen iki istekten biri önce tamamlanırsa ne olacağını biliyoruz. Önce **confirm** çalışırsa sipariş onaylanır ve ardından gelen **cancel** isteği onu iptal eder *(onaylanmış bir sipariş iptal edilebilir)*. Önce **cancel** çalışırsa ardından gelen **confirm** iptal edilmiş bir siparişi onaylayamaz ve 409 alır. Yani iki istek de 200 döndüyse siparişin son durumunun **CANCELLED** olması gerekir. Son durumu **CONFIRMED** olan ama iki isteği de 200 dönmüş bir sipariş varsa, bir iptal işlemi *başarılı* yanıtı verdiği halde kaybolmuş demektir.
+
+Bölümün bu noktasına kadar yazdığımız kodla uygulamayı Payara üzerinde başlatıp betiği çalıştıralım. İki terminal penceresine ihtiyacımız olacak. İlkinde Payara üzerinden uygulamayı çalıştırmalıyız. İkinci terminalde ise aşağıdaki gibi betiği çalıştıracağız.
+
+```powershell
+pwsh tools\race-confirm-cancel.ps1
+```
+
+Farklı çalıştırmalarda farklı sonuçlar almamız muhtemeldir.
+
+![Race condition example showing parallel confirm and cancel requests](./images/week_15_11.png)
+
+Betiği arka arkaya üç kez çalıştırdığımızda aşağıdaki sonuçları aldık.
+
+| **Çalıştırma** | **200** | **409** | **İki isteği de 200 dönen** | **Son durum CANCELLED** | **Son durum CONFIRMED** |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 59 | 1 | 29 | 28 | 1 |
+| 2 | 60 | 0 | 30 | 29 | 1 |
+| 3 | 58 | 2 | 28 | 28 | 0 |
+
+İlk iki çalıştırmada son durumu **CONFIRMED** olan birer sipariş var. Bu siparişlerin iptal isteği 200 döndü ama veritabanı iptali hatırlamıyor. Yani ilk olarak **cancel** commit edildi, **confirm** ise onun üzerine **CONFIRMED** durumunu yazdı. Bu tek başına bir kayıp güncellemenin kanıtı olarak düşünülebilir.
+
+Üçüncü çalıştırmada ise hiç **CONFIRMED** durumu yok. Siparişlerin hepsi **CANCELLED** durumda ve ilk bakışta her şey yolunda gibi. Lakin son durum tek başına yeterli bir kanıt değil. Önce **confirm**, ardından **cancel** sırayla çalışsaydı da son durum **CANCELLED** olacaktı. İki durumu birbirinden ayırmak için sunucu loguna bakmamız gerekiyor. **cancel** işleminin log satırı, siparişin iptal edilmeden önceki durumunu yazıyor. Sıralı bir çalışmada bu satırın **cancelled while CONFIRMED** olması gerekirdi. Payara terminalindeki loglar aşağıdaki gibi.
+
+```text
+10576 confirmed, total 14.00 TRY
+10577 confirmed, total 14.00 TRY
+10576 cancelled while DRAFT
+10578 confirmed, total 14.00 TRY
+10577 cancelled while DRAFT
+10579 confirmed, total 14.00 TRY
+10578 cancelled while DRAFT
+```
+
+Her sipariş için önce **confirmed** satırı yazılmış, birkaç milisaniye sonra da **cancelled while DRAFT** satırı gelmiş. Yani **cancel** isteği siparişi, **confirm** isteği henüz commit etmeden **DRAFT** halinde okumuş. **confirm** commit edildi ve gözlemcisi müşteriye *siparişiniz onaylandı* bildirimini gönderdi. Ardından **cancel**, onay bilgisinden habersiz şekilde siparişin üzerine **CANCELLED** yazdı ve o da *siparişiniz iptal edildi* bildirimini gönderdi. Veritabanı bu iki değişiklikten sadece sonuncusunu hatırlıyor. Son durumu **CANCELLED** görünen siparişlerin neredeyse hepsi aslında birer kayıp güncelleme. Tek bir **CONFIRMED** sonucu buzdağının sadece görünen kısmıydı. Bu siparişleri saymak için Payara çıktısını bir dosyaya da yönlendirebiliriz.
+
+```powershell
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war 2>&1 | Tee-Object payara.log
+```
+
+Betiği çalıştırdıktan sonra başka bir terminalde aşağıdaki komutu işletebiliriz.
+
+```powershell
+Select-String -Path payara.log -Pattern "cancelled while DRAFT" | Measure-Object
+```
+
+![Cancelled while draft counts](./images/week_15_12.png)
+
+Ölçümlerde elde edilen sayılar, iki isteğin birbirinin değişikliğini görmeden aynı siparişi yazdığı durumların sayısıdır. `@Transactional` bu durumu engellemez. İki transaction'ın her biri kendi içinde tutarlıdır. Asıl sorun, ikisinin aynı veriyi birbirinden habersiz okuyup yazmasıdır.
+
+> Paralel isteklerin zamanlaması makineden makineye değişir. Muhtemelen kendi denemelerinizde sayılar farklı olacaktır. 409 yanıtlarının azlığı, isteklerin neredeyse tamamının gerçekten aynı anda işlendiğini gösteriyor. Hiç **CONFIRMED** görmezseniz `-Orders 100` parametresiyle sipariş sayısını artırmayı deneyebilirsiniz.
+
+### Sürüm Bilgisi Nerede Durmalı?
+
+Bu problemin bilinen çözümü **iyimser kilitleme** *(optimistic locking)*. Her kayda bir sürüm numarası eklenir. Bir kayıt güncellenirken okunduğu andaki sürüm numarası ile karşılaştırılır. `UPDATE orders SET ..., version = 3 WHERE order_id = 10249 AND version = 2` gibi bir cümle, aradan geçen sürede başka biri kaydı değiştirdiyse hiçbir satırı güncelleyemez ve çakışma fark edilir. Kilitleme *iyimser* olarak tarif edilir zira kaydı okurken kimseyi beklemez *(pessimistic locking'deki `SELECT ... FOR UPDATE` gibi)*. Çakışmanın nadir olacağını varsayar ve sadece yazarken kontrol eder.
+
+JPA bu mekanizmayı `@Version` anotasyonuyla hazır olarak sunmaktadır. Ancak bizim tasarımımızda bir sorun var. **JpaOrderRepository** okuduğu **OrderEntity** nesne örneğini hemen domain nesnesine çevirmekte ve kaydederken **OrderEntity.from(order)** ile yeni bir entity oluşturmakta. Okunan sürüm numarası domain nesnesinde bir yerde durmazsa kaydetme sırasında kaybolur ve JPA'nın karşılaştırabileceği bir değer kalmaz. Bu yüzden sürüm numarasının **Order** aggregate'i ile birlikte yolculuk etmesi gerekiyor.
+
+**Order** sınıfına teknik bir sürüm alanı eklemek domain'i JPA'ya bağlamıyor. Bir **long** değer hiçbir framework'ü tanımaz ve `ADR-0004` belgesindeki kararları bozmaz. Ne var ki domain katmanı artık *bu aggregate'in kalıcı hali kaç kez değişti* bilgisini de taşıyor. Bunu bilinçli bir taviz olarak kabul edip, ADR-0011 belgesinde gerekçesiyle birlikte yazacağız *(Vaughn Vernon da Implementing Domain-Driven Design kitabında bu sorunu nasıl ele aldığını araştıralım.)*.
+
+### Domain: Sürüm ve Yeni Bir Exception
+
+**Order** sınıfına yeni bir alan ve bir getter metodu ekleyeceğiz. **reconstitute** metodu da sürüm numarasını alacak şekilde değişecek.
+
+```java
+private long version;
+
+public static Order reconstitute(OrderId orderId, CustomerId customerId, LocalDate orderDate,
+        OrderStatus status, Address shippingAddress, LocalDate shippedDate, List<OrderLine> lines,
+        long version) {
+    Order order = new Order(orderId, customerId, orderDate);
+    order.version = version;
+    ...
+}
+
+public long version() {
+    return version;
+}
+```
+
+Yeni oluşturulan bir siparişin sürümü **0** şeklinde kabul edilir. Bu değer *henüz hiç kaydedilmedi* anlamına geliyor. Sürümü sadece **reconstitute** metodu, yani persistence paketi verebiliyor. Diğer yandan domain'in var olan hiçbir davranışı sürümü değiştirmiyor.
+
+Çakışma bir iş kuralı ihlali değil ama istemci açısından anlamı belli. *"Sen okuduktan sonra bu sipariş değişti, tekrar oku ve yeniden dene."* Yani bir **CONFLICT**. Bu amaçlar `domain` paketine yeni bir exception eklememizde yarar var.
+
+```java
+package com.lectures.business.design.sales.domain;
+
+import com.lectures.business.design.shared.kernel.DomainException;
+
+public class ConcurrentOrderChangeException extends DomainException {
+
+    private final OrderId orderId;
+
+    public ConcurrentOrderChangeException(OrderId orderId) {
+        super("order " + orderId + " was changed by someone else; read it again and retry", Kind.CONFLICT);
+        this.orderId = orderId;
+    }
+
+    public OrderId orderId() {
+        return orderId;
+    }
+}
+```
+
+ **Kind** değeri **CONFLICT** olduğu için yanıt 409 olacak, **code** değeri de sınıf adından `concurrent-order-change` olarak türetilecek. HTTP katmanında tek satır değişmiyor. Bu yeni kodu **DomainExceptionKindTest** sınıfında ilgili yere ekleyerek sabitleyelim.
+
+```java
+assertKind(new ConcurrentOrderChangeException(id), Kind.CONFLICT, "concurrent-order-change");
+```
+
+### Şema: V3 Migration
+
+`sales` modülünün `db/migration/sales` klasörüne üçüncü bir migration ekleyerek devam edelim. Uygulanmış migration'ları asla değiştirmediğimizi hatırlayalım *(ADR-0008)*. İlgili migration planında aşağıdaki SQL komutu olmalı.
+
+```sql
+ALTER TABLE orders ADD COLUMN version BIGINT NOT NULL DEFAULT 1;
+```
+
+Daha önce kaydedilmiş siparişler **1** sürümüyle başlıyor. Uygulama açıldığında **Flyway** yeni migration'ı uygulayacak ve log'da `sales schema at version 3` satırını göreceğiz.
+
+### Entity ve Repository
+
+**OrderEntity** sınıfına sürüm alanını ekleyelim ve domain dönüşüm metotlarında taşıyalım.
+
+```java
+@Version
+@Column(name = "version", nullable = false)
+private long version;
+
+static OrderEntity from(Order order) {
+    ...
+    entity.version = order.version();
+    ...
+}
+
+Order toDomain() {
+    return Order.reconstitute(
+            ...,
+            lines.stream().map(OrderLineColumns::toOrderLine).toList(),
+            version);
+}
+```
+
+**JPA**, `@Version` ile işaretlenen alanı kendisi yönetir. Yeni bir kayıt eklerken değeri **1** yapar. Her güncellemede **UPDATE** cümlesinin **WHERE** kısmına mevcut sürümü ekler ve değerini bir artırır. Güncellenen satır sayısı sıfırsa bir **OptimisticLockException** fırlatır. **merge** de verilen entity'nin sürümünü veritabanındakiyle karşılaştırır ve daha eski bir sürüm gelirse veritabanına hiç gitmeden aynı exception'ı fırlatır. Buna göre **JpaOrderRepository** sınıfının **save** metodunu da aşağıdaki gibi değiştirelim.
+
+```java
+@Override
+public void save(Order order) {
+    Objects.requireNonNull(order, "order must not be null");
+    try {
+        entityManager.merge(OrderEntity.from(order));
+        entityManager.flush();
+    } catch (OptimisticLockException e) {
+        throw new ConcurrentOrderChangeException(order.orderId());
+    }
+}
+```
+
+Buradaki **flush** çağrısı önemli. Müşteriler adımında `write-behind` davranışından bahsetmiştik. JPA, değişiklikleri commit işlemine kadar biriktirir. Bu satır olmasaydı iki istek aynı anda **DRAFT** sürümünü okuduğunda çakışma **UPDATE** cümlesinin çalıştığı commit anında ortaya çıkacaktı. Commit işlemini `@Transactional` interceptor'ı yaptığı için **OptimisticLockException** kullanım senaryosunun dışına bir **TransactionalException** olarak çıkar ve **ProblemMapper** onu 500 olarak eşlerdi. **flush**, bekleyen SQL cümlelerini hemen veritabanına gönderiyor. Böylece çakışma repository'nin içinde ortaya çıkıyor ve onu domain diliyle ifade edebiliyoruz. Bir aggregate'i tek bir transaction içinde kaydettiğimiz için bu ek **flush** çağrısının maliyeti yok denecek kadar az.
+
+> **OptimisticLockException** yakalandığında JPA transaction'ı zaten geri alınmak üzere işaretlemiş *(rollback-only)* olur. Fırlattığımız **ConcurrentOrderChangeException** bir **RuntimeException** olduğu için `@Transactional` da transaction'ı geri alıyor. Böylece gözlemciler `AFTER_SUCCESS` aşamasında hiç çalışmıyor ve geri alınan değişiklik için bildirim gönderilmiyor.
+
+### InMemory Repository' de Aynı Kurala Uymalı
+
+Sözleşme testlerine iki yeni test metodu daha ekleyeceğiz. Bu testler **OrderRepositoryContract** sınıfında durduğu için **InMemory**, **H2** ve **PostgreSQL** implementasyonlarının üçü de onlardan geçmek zorunda.
+
+```java
+@Test
+@DisplayName("of two copies read together, only the first save wins")
+void staleCopyIsRefused() {
+    Order first = repository.getById(OrderId.of(10251));
+    Order second = repository.getById(OrderId.of(10251));
+
+    first.confirm();
+    repository.save(first);
+    second.cancel();
+
+    assertThatThrownBy(() -> repository.save(second))
+            .isInstanceOf(ConcurrentOrderChangeException.class);
+    assertThat(repository.getById(OrderId.of(10251)).status()).isEqualTo(OrderStatus.CONFIRMED);
+}
+
+@Test
+@DisplayName("every save moves the version on; a new aggregate starts at zero")
+void versionsMoveOnWithEachSave() {
+    Order draft = OrderBuilder.anOrder().withId(10270).forCustomer("VINET").withLine(11, "14.00", 1).build();
+    assertThat(draft.version()).isZero();
+
+    repository.save(draft);
+    Order stored = repository.getById(OrderId.of(10270));
+    stored.confirm();
+    repository.save(stored);
+
+    assertThat(repository.getById(OrderId.of(10270)).version()).isEqualTo(stored.version() + 1);
+}
+```
+
+**staleCopyIsRefused** testi, paralel istekler betiğinin yarattığı durumu tek bir thread'de ve her seferinde aynı şekilde yeniden üretiyor. Aynı siparişin iki kopyası okunuyor, biri kaydediliyor ve diğeri reddediliyor. **InMemoryOrderRepository** ise şu anki haliyle bu testten geçemez. Daha önce sözleşme testlerinin in-memory repository'yi bir veritabanı gibi davranmaya zorladığını görmüştük. Aynı şey burada da olacaktır. Bu yüzden **save** ve **copyOf** metotlarını aşağıdaki gibi değiştirelim.
+
+```java
+@Override
+public void save(Order order) {
+    Objects.requireNonNull(order, "order must not be null");
+    Order stored = orders.get(order.orderId());
+    long storedVersion = stored == null ? 0 : stored.version();
+    if (order.version() != storedVersion) {
+        throw new ConcurrentOrderChangeException(order.orderId());
+    }
+    orders.put(order.orderId(), copyOf(order, storedVersion + 1));
+}
+
+private static Order copyOf(Order order) {
+    return copyOf(order, order.version());
+}
+
+private static Order copyOf(Order order, long version) {
+    return Order.reconstitute(order.orderId(), order.customerId(), order.orderDate(),
+            order.status(), order.shippingAddress().orElse(null),
+            order.shippedDate().orElse(null), order.lines(), version);
+}
+```
+
+Son olarak **ArchitectureTest** sınıfındaki `only_persistence_reconstitutes` kuralı **reconstitute** metodunu parametre tipleriyle tarif ediyordu. Metodun imzası değiştiği için kuralı da güncellememiz gerekiyor. Güncellemezsek kural artık var olmayan bir metodu korur ve hiçbir zaman kırılmaz.
+
+```java
+.should().callMethod(Order.class, "reconstitute", OrderId.class, CustomerId.class,
+        LocalDate.class, OrderStatus.class, Address.class, LocalDate.class, List.class, long.class);
+```
+
+### İspat
+
+Önce yeni sözleşme testlerini üç implementasyon için çalıştıralım *(Docker yoksa PostgreSQL testleri atlanır)*.
+
+```powershell
+# src\week15-jpa-persistence klasöründe
+mvn -q -pl sales -am test "-Dtest=InMemoryOrderRepositoryTest,JpaOrderRepositoryTest,PostgresOrderRepositoryTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+
+![Test result 1](./images/week_15_13.png)
+
+JPA'nın ürettiği SQL'de sürüm kontrolünü görmek için aynı testi SQL loglarıyla çalıştıralım.
+
+```powershell
+$sql = "-DargLine=-Declipselink.logging.level.sql=FINE -Declipselink.logging.parameters=true"
+mvn -q -pl sales -am test $sql "-Dtest=JpaOrderRepositoryTest#staleCopyIsRefused" "-Dsurefire.failIfNoSpecifiedTests=false" | Select-String "EL Fine"
+```
+
+İlk kopyanın kaydı şu cümleyi üretiyor.
+
+![Test result 2](./images/week_15_14.png)
+
+```text
+UPDATE orders SET status = ?, version = ? WHERE ((order_id = ?) AND (version = ?))
+```
+
+İkinci kopya için ise hiçbir **UPDATE** çalışmıyor. **merge**, veritabanındaki sürümün elindeki kopyadan yeni olduğunu daha **SELECT** aşamasında fark ediyor ve **OptimisticLockException** fırlatıyor.
+
+Şimdi uygulamayı derleyip Payara üzerinde başlatalım ve aynı betiği tekrar çalıştıralım.
+
+```powershell
+mvn clean install
+java -jar C:\payara-micro\payara-micro-7.2026.8.jar --nocluster --systemProperties payara\local.properties --deploy app\target\sales.war
+```
+
+Başka bir terminalde:
+
+```powershell
+pwsh tools\race-confirm-cancel.ps1
+```
+
+![Test result 3](./images/week_15_15.png)
+
+Veritabanındaki sürümlere de bakalım.
+
+```powershell
+docker exec -it java-study-notes-postgres psql -U johndoe -d postgres -c "SELECT status, version, COUNT(*) FROM orders GROUP BY status, version ORDER BY status, version"
+```
+
+![Docker SQL result](./images/week_15_16.png)
+
+```text
+  status   | version | count
+-----------+---------+-------
+ CANCELLED |       1 |   517
+ CANCELLED |       2 |     6
+ CANCELLED |       3 |    12
+ CONFIRMED |       1 |    25
+ CONFIRMED |       2 |   102
+ DRAFT     |       1 |     2
+ SHIPPED   |       1 |     3
+```
+
+Sürümü **3** olan 12 sipariş iki kez başarıyla güncellenmiş siparişler *(ekleme, onay, iptal)*. Sürümü **2** olanlar ise sadece 6 kez güncellenebildi, çünkü ikinci istek ya çakışma ya da durum kuralı nedeniyle reddedildi. Ayrıca bir istemcinin hem 200 hem de 409 alabildiği bu senaryoda 409 yanıtı istemciye ne yapması gerektiğini de söylüyor: *"read it again and retry"*.
+
+> Çakışan isteği sunucu tarafında otomatik olarak yeniden denemek *(retry)* cazip gelebilir. Ancak **confirm** ile **cancel** arasındaki çakışmada yeniden denemenin sonucu, kullanıcının niyetiyle çelişebilir. İptal etmek isteyen kullanıcı, siparişin arada onaylandığını bilmeden iptal edebilir. Bu yüzden kararı istemciye bırakıyoruz *(Tartışmaya açabiliriz)*.
 
 // DEVAM EDECEK
 
