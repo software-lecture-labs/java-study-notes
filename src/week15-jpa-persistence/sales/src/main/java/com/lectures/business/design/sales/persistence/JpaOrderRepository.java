@@ -1,11 +1,13 @@
 package com.lectures.business.design.sales.persistence;
 
+import com.lectures.business.design.sales.domain.ConcurrentOrderChangeException;
 import com.lectures.business.design.sales.domain.Order;
 import com.lectures.business.design.sales.domain.OrderId;
 import com.lectures.business.design.shared.kernel.Specification;
 import jakarta.enterprise.context.Dependent;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.OptimisticLockException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -30,7 +32,12 @@ public final class JpaOrderRepository implements OrderRepository {
     @Override
     public void save(Order order) {
         Objects.requireNonNull(order, "order must not be null");
-        entityManager.merge(OrderEntity.from(order));
+        try {
+            entityManager.merge(OrderEntity.from(order));
+            entityManager.flush();
+        } catch (OptimisticLockException e) {
+            throw new ConcurrentOrderChangeException(order.orderId());
+        }
     }
 
     @Override

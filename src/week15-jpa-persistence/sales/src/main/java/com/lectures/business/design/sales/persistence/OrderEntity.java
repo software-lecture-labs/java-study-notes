@@ -17,6 +17,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,6 +50,10 @@ public class OrderEntity {
     @Column(name = "shipped_date")
     private LocalDate shippedDate;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
     @ElementCollection
     @CollectionTable(name = "order_lines", joinColumns = @JoinColumn(name = "order_id"))
     @OrderBy("lineNo")
@@ -65,6 +70,7 @@ public class OrderEntity {
         entity.status = order.status();
         entity.shippingAddress = order.shippingAddress().map(AddressColumns::from).orElse(null);
         entity.shippedDate = order.shippedDate().orElse(null);
+        entity.version = order.version();
         int lineNo = 1;
         for (OrderLine line : order.lines()) {
             entity.lines.add(OrderLineColumns.from(lineNo++, line));
@@ -80,6 +86,7 @@ public class OrderEntity {
                 status,
                 shippingAddress == null ? null : shippingAddress.toAddress(),
                 shippedDate,
-                lines.stream().map(OrderLineColumns::toOrderLine).toList());
+                lines.stream().map(OrderLineColumns::toOrderLine).toList(),
+                version);
     }
 }
