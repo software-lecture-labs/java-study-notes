@@ -43,6 +43,7 @@
         <module>week12-jdbc-and-flyway</module>
         <module>week13-http-boundary</module>
         <module>week14-application-server</module>
+        <module>week15-jpa-persistence</module>
     </modules>
 
     <dependencies>

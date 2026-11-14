@@ -3,7 +3,7 @@
 # Bölüm 14: Uygulama Sunucusuna Geçiş: CDI, JTA ve JAX-RS ile Payara Micro
 
 <!-- nav:top:start -->
-[← Bölüm 13](java-chapter-13.md#top) · [İçindekiler](README.md#top)
+[← Bölüm 13](java-chapter-13.md#top) · [İçindekiler](README.md#top) · [→ Bölüm 15](java-chapter-15.md#top)
 <!-- nav:top:end -->
 
 Son dört bölümde bilinçli olarak zor yolu seçtik. Nesneleri birbirine bağlayan **composition root** sınıfını *(SalesModule)* elle yazdık, domain olaylarını dağıtan bir yayıncı *(InProcessEventPublisher)* geliştirdik, veritabanı bağlantısını ortam değişkenlerinden okuyan bir **Database** sınıfı kurguladık, transaction'ları repository içinde `setAutoCommit(false)` ve `commit()` çağrılarıyla yönettik ve son olarak JDK'nın basit HTTP sunucusu üzerine **regex** ile yönlendirme yapan, **JSON** dönüşümünü, doğrulamayı ve hata eşlemesini tek tek ele alan bir **HTTP katmanı** yazdık. Amacımız bir uygulama sunucusunun bizim yerimize ne yaptığını görmekti.
@@ -2129,5 +2129,5 @@ API `http://localhost:8080/sales/api/orders`, **OpenAPI** belgesi ise `http://lo
 
 | ← Önceki Bölüm | İçindekiler | Sonraki Bölüm → |
 | :--- | :---: | ---: |
-| [Bölüm 13: HTTP Boundary, DTO, Validasyon ve Hata Sözleşmeleri](java-chapter-13.md#top) | [Ders Notları](README.md#top) | |
+| [Bölüm 13: HTTP Boundary, DTO, Validasyon ve Hata Sözleşmeleri](java-chapter-13.md#top) | [Ders Notları](README.md#top) | [Bölüm 15: JPA ile Persistence: Entity'ler, Eşleme ve İyimser Kilitleme](java-chapter-15.md#top) |
 <!-- nav:bottom:end -->
