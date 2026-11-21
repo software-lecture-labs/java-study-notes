@@ -1,6 +1,6 @@
 # Alıştırma 00 *(SOLID İlkeleri ve Tasarım Kalıpları)*
 
-Bu testin amacı **SOLID *(Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)*** ilkeleri ile kurumsal projelerde sık kullanılan bazı tasarım kalıplarını *(Strategy, State, Chain of Responsibility, Decorator, Adapter, Command)* **Java** dili üzerinden, kod parçaları ve senaryolar yardımıyla değerlendirmektir. Testin sonunda cevap anahtarı ve her soru için kısa açıklamalar yer almaktadır.
+Bu testin amacı **SOLID *(Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)*** ilkeleri ile kurumsal projelerde sık kullanılan bazı tasarım kalıplarını *(Strategy, State, Chain of Responsibility, Decorator, Adapter, Command)* **Java** dili üzerinden, kod parçaları ve senaryolar yardımıyla değerlendirmektir. Testin sonunda cevap anahtarı yer almaktadır.
 
 *Not: Sorular Java 21 *(JDK 21)* sürümü üzerinden hazırlanmıştır.*
 
@@ -141,7 +141,7 @@ public class ClaudeSubscriber extends Subscriber {
 
 ## Soru 5
 
-Üçcüncü soruda aşağıdaki gibi bir söz dizimi *(syntax)* kullanılmaktadır.
+Üçüncü soruda aşağıdaki gibi bir söz dizimi *(syntax)* kullanılmaktadır.
 
 ```java
 if (subscriber instanceof ClaudeSubscriber claude) {
@@ -374,7 +374,7 @@ Sizce bu kodun çıktısı ne olur?
 
 ## Soru 11
 
-Bir CSV formatlayıcısı yazdığımızı düşünelim. Alanları bir seperator ile birleştirmek için ilk etapta aşağıdaki gibi bir kod yazdığımızı varsayalım.
+Bir CSV formatlayıcısı yazdığımızı düşünelim. Alanları bir separator ile birleştirmek için ilk etapta aşağıdaki gibi bir kod yazdığımızı varsayalım.
 
 ```java
 int id = 42;
