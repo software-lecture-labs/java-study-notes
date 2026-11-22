@@ -1,6 +1,6 @@
 # Alıştırma 00 *(SOLID İlkeleri ve Tasarım Kalıpları)*
 
-Bu testin amacı **SOLID *(Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)*** ilkeleri ile kurumsal projelerde sık kullanılan bazı tasarım kalıplarını *(Strategy, State, Chain of Responsibility, Decorator, Adapter, Command)* **Java** dili üzerinden, kod parçaları ve senaryolar yardımıyla değerlendirmektir. Testin sonunda cevap anahtarı yer almaktadır.
+Bu testin amacı **SOLID *(Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)*** ilkeleri ile kurumsal projelerde sık kullanılan bazı tasarım kalıplarını *(Template Method, Strategy, State, Chain of Responsibility, Decorator, Adapter, Command)* **Java** dili üzerinden, kod parçaları ve senaryolar yardımıyla değerlendirmektir. Testin sonunda cevap anahtarı yer almaktadır.
 
 *Not: Sorular Java 21 *(JDK 21)* sürümü üzerinden hazırlanmıştır.*
 
@@ -67,7 +67,7 @@ Bu metodu tasarım açısından değerlendirdiğinizde dikkat çeken en kritik s
 
 ## Soru 3
 
-Farklı LLM *(Large Language Model)* sağlayıcılarına abone olan kullanıcıların harcadığı AI kredi harcamalarını hesaplayan bir faturalandırma servisi geliştirdiğimizi düşünelim. Bu servisin içeriği aşağıdaki gibidir. **ClaudeSubscriber**, **GrokSubscriber** ve **LlamaSubscriber** sınıfları arasında herhangi bir ortak üst tip *(abstraction)* bulunmaMAktadır.
+Farklı LLM *(Large Language Model)* sağlayıcılarına abone olan kullanıcıların harcadığı AI kredi harcamalarını hesaplayan bir faturalandırma servisi geliştirdiğimizi düşünelim. Bu servisin içeriği aşağıdaki gibidir. **ClaudeSubscriber**, **GrokSubscriber** ve **LlamaSubscriber** sınıfları arasında hesaplama davranışını tanımlayan ortak bir üst tip *(abstraction)* bulunmaMAktadır.
 
 ```java
 public class BillingService {
@@ -96,7 +96,7 @@ Bu kod parçası ile ilgili aşağıdaki görüşler ortaya atılmıştır;
 
 - **I.** Sisteme **MistralSubscriber** gibi yeni bir abone türü eklendiğinde **BillingService** sınıfına yeni bir **else if** dalı eklemek gerekir. Bu durum **Open/Closed Principle *(OCP)*** ihlalidir.
 - **II.** Yeni dalı eklemeyi unutmak derleme zamanında fark edilmez. Hata ancak çalışma zamanında **IllegalArgumentException** olarak ortaya çıkar.
-- **III.** Abone sınıfları ortak bir soyut sınıftan *(abstract class)* türeseydi, servis `List<Subscriber>` üzerinde dolaşarak tip kontrolü yapmadan polimorfik çağrı yapabilirdi.
+- **III.** Abone sınıfları `calculateAiCredit()` metodunu bildiren ortak bir soyut sınıftan *(abstract class)* türeseydi, servis `List<Subscriber>` üzerinde dolaşarak tip kontrolü yapmadan polimorfik çağrı yapabilirdi.
 - **IV.** `List<Object>` kullanımı derleyiciye daha fazla bilgi verdiğinden tip güvenliğini *(type safety)* artırır.
 
 Sizce hangi ifade/ifadeler doğrudur?
@@ -165,7 +165,7 @@ Sizce hangi ifade/ifadeler doğrudur?
 
 ## Soru 6
 
-Token maliyeti hesaplayan bir hiyerarşide üst sınıf *(base class)* şu sözleşmeyi *(contract)* vaat etmektedir; *"Her zaman geçerli ve sıfırdan büyük veya eşit bir değer döner, asla exception fırlatmaz."* Bu taban sınıftan türeyen sınıflardan birisi de aşağıdaki gibidir.
+Token maliyeti hesaplayan bir hiyerarşide üst sınıf *(base class)* şu sözleşmeyi *(contract)* vaat etmektedir; *"Her zaman geçerli ve sıfırdan büyük veya eşit bir değer döner, asla exception fırlatmaz. Pozitif token tüketimi son geçerli birim fiyat üzerinden ücretlendirilir. Bağlantı kesildiğinde kullanılabilecek geçerli bir fiyat yerel olarak saklanır."* Bu taban sınıftan türeyen sınıflardan birisi de aşağıdaki gibidir.
 
 ```java
 public class OfflineTokenCalculator extends TokenCalculator {
@@ -195,10 +195,10 @@ Aşağıdaki arayüzün sözleşmesi yorum satırlarında belirtilmiştir.
 
 ```java
 /*
-  Ön koşul  : tokens >= 0 beklenir. Negatif değerler 0 kabul edilir.
-  Son koşul : Dönüş değeri her zaman >= 0'dır.
-              Aynı girdi için her zaman aynı sonuç döner (deterministik).
-  Exception : Hiçbir koşulda exception fırlatılmaz.
+  Girdi     : Metot her long değerini kabul eder.
+  Sonuç     : tokens <= 0 için 0 döner.
+              Pozitif girdilerde sonuç deterministik ve negatif olmayan bir değerdir.
+  Exception : Metot exception fırlatmaz.
   Alt tipler bu sözleşmeyi zayıflatamaz, sadece daha güçlü garantiler ekleyebilir.
 */
 public interface TokenCalculator {
@@ -408,7 +408,7 @@ Bir e-ticaret sitesinde kargo ücreti teslimat tipine *(STANDARD, EXPRESS, PICKU
           └──────────────────┘ └─────────────────┘ └─────────────────────┘ └─────────────────┘
 ```
 
-Aşağıdakilerden hangisi, diyagramda **[ ? ]** ile gösterilen eksik parçanın yerine gelebilir?
+Diyagramda **[ ? ]** ile gösterilen eksik parça için aşağıdaki arayüzlerden hangisi, her stratejinin sorumluluğunu yalnızca seçilen teslimat tipinin ücretini hesaplamakla sınırlar?
 
 A)
 
@@ -507,7 +507,7 @@ Sizce bu senaryo için en uygun tasarım kalıbı hangisidir?
 
 ## Soru 15
 
-Bir önceki senaryo **State** kalıbı ile aşağıdaki gibi yeniden tasarlanmıştır *(kodun sadece ilgili kısımları verilmiştir)*.
+Bir e-ticaret platformunda siparişin yaşam döngüsü, her durumun ayrı bir sınıfla temsil edildiği bir tasarımla aşağıdaki gibi modellenmiştir *(kodun sadece ilgili kısımları verilmiştir)*.
 
 ```java
 public interface OrderState {
@@ -537,7 +537,7 @@ final class ShippedState implements OrderState {
 }
 ```
 
-Aşağıdaki kod parçası çalıştırıldığında ekran çıktısı ne olur? *(NewState sınıfının pay metodu siparişi PaidState durumuna geçirmektedir.)*
+Aşağıdaki kod parçası çalıştırıldığında ekran çıktısı ne olur? *(NewState sınıfının pay metodu siparişi PaidState durumuna geçirmektedir. `transitionTo` metoduna verilen geçiş mesajları siparişin geçmişine kaydedilir; konsola yalnızca gösterilen `println` çağrıları yazar. `getStatus()` metodu aktif durumun adını döndürür.)*
 
 ```java
 Order order = new Order("SIP-1001");
@@ -609,7 +609,7 @@ Döviz kuru getiren bir servise önbellekleme *(cache)*, loglama ve geçici hata
 
 - **RemoteRateClient(2)**: Uzak servisi temsil eder, ilk **2** çağrıda zaman aşımı *(IllegalStateException)* fırlatır, sonrakilerde kur değerini döner. **getCallCount()** uzak servise kaç kez gidildiği bilgisini verir.
 - **RetryingRateProvider(delegate, 3)**: **IllegalStateException** alındığında en fazla **3** deneme yapar.
-- **CachingRateProvider(delegate)**: Aynı döviz kuru çifti için sarmaladığı nesneye yalnızca bir kez gider *(computeIfAbsent)*.
+- **CachingRateProvider(delegate)**: Sonuçları `computeIfAbsent` ile önbelleğe alır. Bir döviz kuru çifti için başarılı ve null olmayan bir sonuç önbellekte bulunduğu sürece sarmaladığı nesneye tekrar gitmez. Hesaplama exception ile biterse önbelleğe kayıt eklenmez.
 - **LoggingRateProvider(delegate, log)**: Her çağrıda istek ve başarılı sonuç için birer log satırı yazar.
 
 ```java
@@ -643,12 +643,13 @@ Bir e-ticaret uygulaması iki farklı sanal POS sağlayıcısı *(provider)* ile
 - **PayFastClient**: Tutarı kuruş cinsinden **long** olarak bekler *(149.90 TL → 14990)* ve sonucu sayısal bir kod ile döner *(0 = başarılı)*.
 - **LegacyBankPos**: XML metni ile çalışır, tutarı metinsel bilgi olarak ve virgüllü bekler *("1250,50")*, cevap kodu **"00"** ise başarılıdır.
 
-İş akışının *(CheckoutService)* bu detayları bilmeMEsi ve yalnızca kendi dilinde tasarlanmış bir arayüzle *(TL cinsinden tutar, PaymentResult dönüşü)* konuşması hedeflenmektedir. Aşağıdaki çizelgede yer alan tasarım ile ilerlenmesi kararlaştırılmıştır.
+İş akışının *(CheckoutService)* bu detayları bilmeMEsi ve yalnızca kendi dilinde tasarlanmış bir arayüzle *(`BigDecimal` türünde, iki ondalıklı TL tutarı ve PaymentResult dönüşü)* konuşması hedeflenmektedir. Aşağıdaki çizelgede yer alan tasarım ile ilerlenmesi kararlaştırılmıştır.
 
 ```text
 ┌──────────────────┐      use     ┌────────────────────────────────────┐
 │ CheckoutService  │─────────────>│ <<interface>> PaymentGateway       │
-└──────────────────┘              │ + charge(orderNo, double amount)   │
+└──────────────────┘              │ + charge(orderNo,                  │
+                                  │     BigDecimal amount)             │
                                   │   : PaymentResult                  │
                                   └─────────────────▲──────────────────┘
                                                     │ implements
@@ -684,8 +685,9 @@ public class PayFastAdapter implements PaymentGateway {
     public PayFastAdapter(PayFastClient client) { this.client = client; }
 
     @Override
-    public PaymentResult charge(String orderNo, double amount) {
-        PayFastResponse response = client.makePayment(orderNo, Math.round(amount * 100), "TRY");
+    public PaymentResult charge(String orderNo, BigDecimal amount) {
+        long amountInKurus = amount.movePointRight(2).longValueExact();
+        PayFastResponse response = client.makePayment(orderNo, amountInKurus, "TRY");
         return response.code() == 0
                 ? PaymentResult.ok(response.transactionRef())
                 : PaymentResult.failed("Ödeme alınamadı (PayFast kodu: " + response.code() + ")");
@@ -697,7 +699,7 @@ C)
 
 ```java
 public class CheckoutService {
-    public PaymentResult pay(String provider, String orderNo, double amount) {
+    public PaymentResult pay(String provider, String orderNo, BigDecimal amount) {
         if ("PAYFAST".equals(provider)) { /* kuruş dönüşümü + kod kontrolü */ }
         else if ("BANK".equals(provider)) { /* XML oluşturma + "00" kontrolü */ }
         return PaymentResult.failed("Bilinmeyen sağlayıcı");
@@ -760,15 +762,14 @@ history.undo();
 history.execute(new MoveUnitCommand(board, "Okçu", 3, 0));
 boolean result = history.redo();
 
-System.out.println(board.positionOf("Okçu") + " " + result);
 ```
 
 Yukarıdaki kod çalıştırıldığında *Okçu* biriminin son konumu ve **result** değişkeninin değeri ne olur?
 
-- A) `Position[x=1, y=2] true`
-- B) `Position[x=1, y=2] false`
-- C) `Position[x=4, y=2] true`
-- D) `Position[x=4, y=0] false`
+- A) Konum `(1, 2)`, result `true`
+- B) Konum `(1, 2)`, result `false`
+- C) Konum `(4, 2)`, result `true`
+- D) Konum `(4, 0)`, result `false`
 
 ## Soru 20
 

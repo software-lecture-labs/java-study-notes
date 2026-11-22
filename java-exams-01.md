@@ -281,68 +281,36 @@ public record CustomerId(String value) {
 
 ## Soru 9
 
-Aşağıdaki kod parçasını dikkatlice inceleyelim.
+Aşağıdaki kod parçasında aynı liste üzerinde iki ayrı stream akışı tanımlanmaktadır.
 
 ```java
 List<String> names = List.of("Chai", "Chang", "Aniseed Syrup");
 
-System.out.println("start");
+// Akış 1
 names.stream()
         .peek(System.out::println)
         .filter(n -> n.length() > 4);
 
-System.out.println("mid");
+// Akış 2
 List<Integer> lengths = names.stream()
         .filter(n -> n.length() > 4)
-        .peek(System.out::println)
         .map(String::length)
         .toList();
-
-System.out.println(lengths);
 ```
 
-Sizce bu kodun ekran çıktısı ne olur?
+Bu kod parçası ile ilgili aşağıdaki ifadeler ortaya atılmıştır.
 
-- A)
-  ```text
-  start
-  Chai
-  Chang
-  Aniseed Syrup
-  mid
-  Chai
-  Chang
-  Aniseed Syrup
-  [5, 13]
-  ```
-- B)
-  ```text
-  start
-  mid
-  Chang
-  Aniseed Syrup
-  [5, 13]
-  ```
-- C)
-  ```text
-  start
-  Chai
-  Chang
-  Aniseed Syrup
-  mid
-  Chang
-  Aniseed Syrup
-  [5, 13]
-  ```
-- D)
-  ```text
-  start
-  mid
-  Chai
-  Chang
-  Aniseed Syrup
-  [5, 13]
-  ```
+- **I.** Akış 1'de bir terminal işlem *(terminal operation)* bulunmadığı için ara işlemler *(peek, filter)* hiç çalıştırılmaz.
+- **II.** Akış 2, `toList()` terminal işlemi ile tüketilir.
+- **III.** **lengths** listesinin içeriği `[5, 13]` olur.
+- **IV.** Akış 1'deki `peek` çağrısı listedeki üç ismi de ekrana yazdırır.
+
+Sizce hangi ifade/ifadeler doğrudur?
+
+- A) I ve IV
+- B) I, II ve III
+- C) II ve IV
+- D) Hepsi
 
 ## Soru 10
 
@@ -431,7 +399,7 @@ System.out.println(List.of(4, 12, 15, 7, 8).stream()
 
 ## Soru 12
 
-Bir satış sisteminde **Order** ve **Customer** iki ayrı aggregate root olarak tasarlanmıştır. **Order**, müşteriyi bir **Customer** nesnesi olarak değil, yalnızca **CustomerId** değeri ile tutmaktadır. Geliştirme döngüsünün ilerleyen günlerinde sisteme yeni bir iş kuralı gelir; *"Sipariş onaylandığında müşterinin kullanılabilir kredi limitinden sipariş tutarı kadar düşülmelidir."* Ekip, **Vaughn Vernon**'un *"bir transaction içinde yalnızca bir aggregate değiştirilmelidir"* önerisine uymak ister.
+Bir satış sisteminde **Order** ve **Customer** iki ayrı aggregate root olarak tasarlanmıştır. **Order**, müşteriyi bir **Customer** nesnesi olarak değil, yalnızca **CustomerId** değeri ile tutmaktadır. Geliştirme döngüsünün ilerleyen günlerinde sisteme yeni bir iş kuralı gelir; *"Sipariş onaylandığında müşterinin kullanılabilir kredi limitinden sipariş tutarı kadar düşülmelidir."* Ekip, **Vaughn Vernon**'un *"bir transaction içinde yalnızca bir aggregate değiştirilmelidir"* önerisine uymak ister. Kredi güncellemesinin sipariş onayından kısa bir gecikmeyle tamamlanması iş birimi tarafından kabul edilmektedir.
 
 Sizce bu şartlarda söz konusu iş kuralı için en uygun tasarım hangisidir?
 
@@ -472,7 +440,7 @@ Bir sipariş servisinde kargolama işlemi sırasıyla şu adımlardan oluşmakta
 
 ## Soru 15
 
-Domain exception'larının istemcilere makine tarafından okunabilir, kararlı bir hata kodu sunması için üst soyut sınıfa `code()` metodu eklenmiştir.
+Domain exception'larının istemcilere makine tarafından okunabilir bir hata kodu sunması için üst soyut sınıfa `code()` metodu eklenmiştir. Bu kod, sınıf adından otomatik olarak türetilmektedir.
 
 ```java
 public abstract class DomainException extends RuntimeException {
@@ -512,7 +480,7 @@ System.out.println(code);
 
 ## Soru 16
 
-**PostgreSQL** üzerinde çalışan bir satış uygulamasında sipariş numaraları `nextval('orders_seq')` çağrısı ile sekanstan *(sequence)* alınmaktadır. Sipariş oluşturma senaryosu tek bir transaction içinde çalışmaktadır. Gün sonu raporunda **10250** numaralı siparişten sonra **10253** numaralı siparişin geldiği görülmüştür. Loglar incelendiğinde aradaki iki sipariş oluşturma isteğinin müşteri bulunamadığı için hata verdiği ve transaction'ların geri alındığı *(rollback)* tespit edilmiştir.
+**PostgreSQL** üzerinde çalışan bir satış uygulamasında sipariş numaraları `nextval('orders_seq')` çağrısı ile sekanstan *(sequence)* alınmaktadır. Sipariş oluşturma senaryosu tek bir transaction içinde çalışmaktadır. Gün sonu raporunda **10250** numaralı siparişten sonra **10253** numaralı siparişin geldiği görülmüştür. Loglar incelendiğinde aradaki iki sipariş oluşturma isteğinin müşteri bulunamadığı için hata verdiği ve transaction'ların geri alındığı *(rollback)* tespit edilmiştir. Her iki istekte de `nextval` çağrısı müşteri kontrolünden önce yapılmıştır.
 
 Sizce bu durum için aşağıdaki açıklamalardan hangisi doğrudur?
 
@@ -557,7 +525,7 @@ Sizce bu sorunu çözmek için en uygun yaklaşım şıklardan hangisidir?
 
 - A) **Order** sınıfının **confirm** ve **cancel** metotlarını `synchronized` olarak işaretlemek.
 - B) Hiçbir değişiklik yapmamak. İstekler zaten JTA transaction'ları içinde çalıştığı için veritabanı bu yarış durumunu *(race condition)* kendiliğinden engeller.
-- C) Siparişler tablosuna bir **version** kolonu eklemek ve entity'de `@Version` ile işaretlemek *(optimistic locking)*. Güncelleme `UPDATE ... WHERE order_id = ? AND version = ?` şeklinde çalışır. Hiçbir satır etkilenmezse kaybeden istek bir çakışma hatası alır ve istemciye **409 Conflict** döndürülür. İstemci siparişi yeniden okuyup kararını tekrar verir.
+- C) Siparişler tablosuna bir **version** kolonu eklemek ve entity'de `@Version` ile işaretlemek *(optimistic locking)*. Güncelleme `UPDATE ... WHERE order_id = ? AND version = ?` şeklinde çalışır. Hiçbir satır etkilenmezse JPA, flush veya commit sırasında bir `OptimisticLockException` fırlatır. API bu çakışmayı HTTP **409 Conflict** yanıtına eşler. İstemci siparişi yeniden okuyup kararını tekrar verir.
 - D) İstemcilerden aynı sipariş için istekleri her zaman sırayla göndermelerini istemek ve bunu API dokümantasyonuna yazmak.
 
 ## Soru 19
@@ -573,7 +541,18 @@ Bu problem literatürde nasıl adlandırılır ve en uygun çözüm hangisidir?
 
 ## Soru 20
 
-Bir satış modülü tek bir Maven modülü *(tek JAR)* olarak geliştirilmektedir ve içinde `sales.domain`, `sales.application` ve `sales.persistence` paketleri bulunmaktadır. Ekip bir mimari karar kaydında *(ADR - Architecture Decision Record)* domain paketinin hiçbir koşulda persistence paketine bağımlı olmayacağını belirlemiştir. Ancak bir geliştirici **Order** sınıfına `private OrderRepository orderRepository;` alanını eklediğinde derleme sorunsuz geçmekte ve tüm birim testler yeşil bayrak kaldırmaktadır.
+Bir satış modülü tek bir Maven modülü *(tek JAR)* olarak geliştirilmektedir ve içinde `sales.domain`, `sales.application` ve `sales.persistence` paketleri bulunmaktadır. Ekip bir mimari karar kaydında *(ADR - Architecture Decision Record)* domain paketinin hiçbir koşulda persistence paketine bağımlı olmayacağını belirlemiştir. Ancak bir geliştirici **Order** sınıfını aşağıdaki gibi değiştirdiğinde derleme sorunsuz geçmekte ve tüm birim testler yeşil bayrak kaldırmaktadır.
+
+```java
+package sales.domain;
+
+import sales.persistence.OrderRepository;
+
+public final class Order {
+    private OrderRepository orderRepository;
+    // Diğer alanlar ve metotlar...
+}
+```
 
 Sizce bu durumun sebebi ve kuralı korumanın en uygun yolu hangisidir?
 
